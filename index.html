@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Affiliate video base</title>
+    <link rel="stylesheet" href="https://unpkg.com/react-image-crop/dist/ReactCrop.css" />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              'brand-bg': '#121212',
+              'surface': '#1e1e1e',
+              'primary': '#6a5acd',
+              'primary-focus': '#836fff',
+              'text-main': '#e0e0e0',
+              'text-secondary': '#a0a0a0',
+              'border-color': '#333333',
+              'blue': {
+                '400': '#60a5fa',
+                '500': '#3b82f6',
+              }
+            },
+          },
+        },
+      }
+    </script>
+  <script type="importmap">
+{
+  "imports": {
+    "react/": "https://aistudiocdn.com/react@^19.2.0/",
+    "react": "https://aistudiocdn.com/react@^19.2.0",
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
+    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.29.0",
+    "react-image-crop": "https://esm.sh/react-image-crop@11.0.5"
+  }
+}
+</script>
+</head>
+  <body class="bg-brand-bg text-text-main">
+    <div id="root"></div>
+  </body>
+</html>
