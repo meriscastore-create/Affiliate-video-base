@@ -15,10 +15,12 @@ type ResultItem = {
 };
 
 type ActiveUploader = 'model' | 'product';
+export type ImageState = { data: string; mimeType: string };
+
 
 const App: React.FC = () => {
-  const [modelImage, setModelImage] = useState<string | null>(null);
-  const [productImage, setProductImage] = useState<string | null>(null);
+  const [modelImage, setModelImage] = useState<ImageState | null>(null);
+  const [productImage, setProductImage] = useState<ImageState | null>(null);
   const [results, setResults] = useState<ResultItem[]>([]);
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
   const [globalError, setGlobalError] = useState<string | null>(null);
@@ -35,10 +37,13 @@ const App: React.FC = () => {
   const [activeUploader, setActiveUploader] = useState<ActiveUploader>('model');
   const [isDragging, setIsDragging] = useState(false);
 
-  const processFile = (file: File, callback: (base64: string) => void) => {
+  const processFile = (file: File, callback: (imageState: ImageState) => void) => {
     const reader = new FileReader();
     reader.onloadend = () => {
-      callback(reader.result as string);
+      callback({
+        data: reader.result as string,
+        mimeType: file.type,
+      });
     };
     reader.readAsDataURL(file);
   };
@@ -48,11 +53,11 @@ const App: React.FC = () => {
       const file = event.clipboardData?.files[0];
       if (file && file.type.startsWith('image/')) {
         event.preventDefault();
-        processFile(file, (base64) => {
+        processFile(file, (imageState) => {
           if (activeUploader === 'model') {
-            setModelImage(base64);
+            setModelImage(imageState);
           } else {
-            setProductImage(base64);
+            setProductImage(imageState);
           }
         });
       }
@@ -68,11 +73,11 @@ const App: React.FC = () => {
     setIsDragging(false);
     const file = e.dataTransfer.files[0];
     if (file && file.type.startsWith('image/')) {
-      processFile(file, (base64) => {
+      processFile(file, (imageState) => {
         if (activeUploader === 'model') {
-          setModelImage(base64);
+          setModelImage(imageState);
         } else {
-          setProductImage(base64);
+          setProductImage(imageState);
         }
       });
     }
@@ -156,10 +161,11 @@ const App: React.FC = () => {
     }
   };
   
-  const generateSingleResult = async (ai: GoogleGenAI, imageGenPrompt: string, index: number, modelImg: string, productImg: string, title: string, description: string): Promise<ResultItem> => {
+  const generateSingleResult = async (ai: GoogleGenAI, imageGenPrompt: string, index: number, modelImg: ImageState, productImg: ImageState, title: string, description: string): Promise<ResultItem> => {
     try {
-      const modelPart = { inlineData: { mimeType: 'image/jpeg', data: modelImg.split(',')[1] } };
-      const productPart = { inlineData: { mimeType: 'image/jpeg', data: productImg.split(',')[1] } };
+      const modelPart = { inlineData: { mimeType: modelImg.mimeType, data: modelImg.data.split(',')[1] } };
+      const productPart = { inlineData: { mimeType: productImg.mimeType, data: productImg.data.split(',')[1] } };
+
 
       const imageResponse = await ai.models.generateContent({
           model: 'gemini-2.5-flash-image',

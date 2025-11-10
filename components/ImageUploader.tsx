@@ -1,9 +1,10 @@
 import React, { useRef } from 'react';
+import { ImageState } from '../App';
 
 interface ImageUploaderProps {
   title: string;
-  imagePreview: string | null;
-  onImageChange: (base64: string | null) => void;
+  imagePreview: ImageState | null;
+  onImageChange: (imageState: ImageState | null) => void;
   id: 'model' | 'product';
   isActive: boolean;
   onSelect: (id: 'model' | 'product') => void;
@@ -26,7 +27,10 @@ const ImageUploader: React.FC<ImageUploaderProps> = ({
     if (file) {
       const reader = new FileReader();
       reader.onloadend = () => {
-        onImageChange(reader.result as string);
+        onImageChange({
+            data: reader.result as string,
+            mimeType: file.type
+        });
       };
       reader.readAsDataURL(file);
     }
@@ -60,7 +64,7 @@ const ImageUploader: React.FC<ImageUploaderProps> = ({
         role="button"
       >
         {imagePreview ? (
-          <img src={imagePreview} alt={`${title} Preview`} className="w-full h-full object-cover" />
+          <img src={imagePreview.data} alt={`${title} Preview`} className="w-full h-full object-cover" />
         ) : (
           <span className="text-text-secondary text-sm px-2 text-center">
             {isActive ? 'Drop or Paste Image Here' : 'Click to Select'}

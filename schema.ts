@@ -185,7 +185,6 @@ export const briefDataSchema = {
                 },
               },
             },
-            custom_voice_model_id: { type: Type.STRING },
           },
         },
         background_music: {
