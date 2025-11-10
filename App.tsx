@@ -140,17 +140,39 @@ const App: React.FC = () => {
             `Produce a 'get ready with me' style photo in a modern bathroom/vanity setting. The influencer is incorporating the product into their morning routine. ${basePromptInstruction}`
           ];
       
-      const generationPromises = imagePrompts.map((prompt, index) => 
-        generateSingleResult(ai, prompt, index, modelImage, productImage, campaignTitle, productDescription)
-      );
+      if (isStorytellingMode) {
+        let previousScript: string | null = null;
+        for (const [index, imageGenPrompt] of imagePrompts.entries()) {
+            const result = await generateSingleResult(
+                ai,
+                imageGenPrompt,
+                index,
+                modelImage,
+                productImage,
+                campaignTitle,
+                productDescription,
+                previousScript
+            );
+            setResults(prev => prev.map(r => (r.id === result.id ? result : r)));
+            if (result.videoPrompt) {
+                previousScript = result.videoPrompt.audio_generation_parameters.voiceover.script_lines
+                    .map(line => line.text)
+                    .join(' ');
+            }
+        }
+      } else {
+        const generationPromises = imagePrompts.map((prompt, index) => 
+          generateSingleResult(ai, prompt, index, modelImage, productImage, campaignTitle, productDescription, null)
+        );
 
-      for (const promise of generationPromises) {
-        promise.then(result => {
-            setResults(prev => prev.map(r => r.id === result.id ? result : r));
-        });
+        for (const promise of generationPromises) {
+          promise.then(result => {
+              setResults(prev => prev.map(r => r.id === result.id ? result : r));
+          });
+        }
+        
+        await Promise.allSettled(generationPromises);
       }
-      
-      await Promise.allSettled(generationPromises);
 
     } catch (e) {
       console.error(e);
@@ -161,7 +183,7 @@ const App: React.FC = () => {
     }
   };
   
-  const generateSingleResult = async (ai: GoogleGenAI, imageGenPrompt: string, index: number, modelImg: ImageState, productImg: ImageState, title: string, description: string): Promise<ResultItem> => {
+  const generateSingleResult = async (ai: GoogleGenAI, imageGenPrompt: string, index: number, modelImg: ImageState, productImg: ImageState, title: string, description: string, previousScript: string | null = null): Promise<ResultItem> => {
     try {
       const modelPart = { inlineData: { mimeType: modelImg.mimeType, data: modelImg.data.split(',')[1] } };
       const productPart = { inlineData: { mimeType: productImg.mimeType, data: productImg.data.split(',')[1] } };
@@ -183,7 +205,11 @@ const App: React.FC = () => {
       
       setResults(prev => prev.map(r => r.id === index ? { ...r, imageUrl, isLoading: true } : r));
       
-      const jsonPrompt = `Campaign Title: ${title}. Product Description: ${description}. Based on the image of a Gen Z influencer, create a detailed JSON brief for a short vertical video (TikTok/Reel). The script must be in Indonesian. The entire output must be a single JSON object that strictly follows the provided schema. Ensure the description and script lines are concise.`;
+      let jsonPrompt = `Campaign Title: ${title}. Product Description: ${description}. Based on the image of a Gen Z influencer, create a detailed JSON brief for a short vertical video (TikTok/Reel). The script must be in Indonesian. The entire output must be a single JSON object that strictly follows the provided schema. Ensure the description and script lines are concise.`;
+
+      if (previousScript) {
+        jsonPrompt += `\n\nIMPORTANT CONTEXT: This video is part of a sequence. The script for the PREVIOUS video was: "${previousScript}". Please generate a new script that continues this story logically and creatively.`;
+      }
 
       const jsonResponse = await ai.models.generateContent({
           model: 'gemini-2.5-flash',

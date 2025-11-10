@@ -197,17 +197,6 @@ export const briefDataSchema = {
             track_suggestions: { type: Type.ARRAY, items: { type: Type.STRING } },
           },
         },
-        sound_effects: {
-          type: Type.ARRAY,
-          items: {
-            type: Type.OBJECT,
-            properties: {
-              name: { type: Type.STRING },
-              timing: { type: Type.STRING },
-              volume: { type: Type.STRING },
-            },
-          },
-        },
       },
     },
     marketing_and_engagement_parameters: {

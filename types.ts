@@ -128,18 +128,11 @@ export interface AudioGenerationParameters {
     volume_level: string;
     track_suggestions: string[];
   };
-  sound_effects: SoundEffect[];
 }
 
 export interface ScriptLine {
   speaker_tag: string;
   text: string;
-}
-
-export interface SoundEffect {
-  name: string;
-  timing: string;
-  volume: string;
 }
 
 export interface MarketingAndEngagementParameters {
