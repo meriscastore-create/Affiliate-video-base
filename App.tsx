@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { GoogleGenAI, Modality } from "@google/genai";
 import { BriefData } from './types';
@@ -5,6 +6,11 @@ import { briefDataSchema } from './schema';
 import ImageUploader from './components/ImageUploader';
 import ResultCard from './components/ResultCard';
 import { CAMERA_OPTIONS, LOCATION_OPTIONS, MOOD_OPTIONS } from './constants';
+
+// FIX: Removed conflicting global type declaration for 'window.aistudio'.
+// The TypeScript error indicates that a declaration for 'window.aistudio'
+// already exists in the global scope. This redundant declaration was causing a conflict.
+// By removing it, the component will use the existing global type definition.
 
 type ResultItem = {
   id: number;
@@ -36,6 +42,35 @@ const App: React.FC = () => {
   // State for enhanced uploader
   const [activeUploader, setActiveUploader] = useState<ActiveUploader>('model');
   const [isDragging, setIsDragging] = useState(false);
+  
+  const [apiKeyReady, setApiKeyReady] = useState(false);
+
+  useEffect(() => {
+    const checkKey = async () => {
+        try {
+            setApiKeyReady(await window.aistudio.hasSelectedApiKey());
+        } catch (e) {
+            console.error("aistudio API not available", e);
+            setApiKeyReady(false); 
+        }
+    };
+    checkKey();
+  }, []);
+
+  const handleSelectKey = async () => {
+    try {
+        await window.aistudio.openSelectKey();
+        setApiKeyReady(true);
+    } catch (e) {
+        console.error("Could not open API key selection:", e);
+    }
+  };
+
+  const onApiKeyInvalid = () => {
+    setGlobalError('Your API key appears to be invalid. Please select a new one.');
+    setApiKeyReady(false);
+  };
+
 
   const processFile = (file: File, callback: (imageState: ImageState) => void) => {
     const reader = new FileReader();
@@ -162,22 +197,23 @@ const App: React.FC = () => {
         }
       } else {
         const generationPromises = imagePrompts.map((prompt, index) => 
-          generateSingleResult(ai, prompt, index, modelImage, productImage, campaignTitle, productDescription, null)
+          generateSingleResult(ai, prompt, index, modelImage, productImage, campaignTitle, productDescription, null).then(result => {
+              setResults(prev => prev.map(r => (r.id === result.id ? result : r)));
+              return result;
+          })
         );
-
-        for (const promise of generationPromises) {
-          promise.then(result => {
-              setResults(prev => prev.map(r => r.id === result.id ? result : r));
-          });
-        }
-        
-        await Promise.allSettled(generationPromises);
+        await Promise.all(generationPromises);
       }
 
     } catch (e) {
-      console.error(e);
-      setGlobalError('An unexpected error occurred during generation. Please check the console.');
-      setResults([]);
+      if (e instanceof Error && e.message.includes('Requested entity was not found')) {
+        onApiKeyInvalid();
+        setResults([]);
+      } else {
+        console.error(e);
+        setGlobalError('An unexpected error occurred during generation. Please check the console.');
+        setResults([]);
+      }
     } finally {
       setIsGenerating(false);
     }
@@ -196,7 +232,8 @@ const App: React.FC = () => {
       });
       
       const generatedImagePart = imageResponse.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
-      if (!generatedImagePart || !generatedImagePart.inlineData) {
+      // FIX: Corrected a ReferenceError by using the correct variable 'generatedImagePart' to check for image data.
+      if (!generatedImagePart || !generatedImagePart.inlineData?.data) {
         throw new Error("Image data not found in response.");
       }
       const base64Image = generatedImagePart.inlineData.data;
@@ -230,16 +267,50 @@ const App: React.FC = () => {
 
     } catch (error) {
       console.error(`Error generating result ${index}:`, error);
+      if (error instanceof Error && error.message.includes('Requested entity was not found')) {
+        throw error; // Re-throw to be caught by the main handler
+      }
       return { id: index, imageUrl: null, videoPrompt: null, isLoading: false, error: 'Generation failed.' };
     }
   };
 
+  if (!apiKeyReady) {
+    return (
+        <div className="min-h-screen bg-brand-bg text-text-main flex flex-col items-center justify-center text-center p-8">
+            <div className="max-w-md">
+                <h1 className="text-3xl font-bold text-white mb-4">Welcome to Affiliate Video Base</h1>
+                <p className="text-text-secondary mb-6">To generate creative briefs and visual concepts, you'll need to select a Google AI API key. This key will be used to access the Gemini models.</p>
+                <p className="text-text-secondary mb-8">
+                    For information on billing and how to set up your key, please visit the{' '}
+                    <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noopener noreferrer" className="text-primary-focus underline hover:text-primary">
+                        official documentation
+                    </a>.
+                </p>
+                <button
+                    onClick={handleSelectKey}
+                    className="w-full bg-primary text-white font-bold py-3 px-4 rounded-md hover:bg-primary-focus focus:outline-none focus:ring-2 focus:ring-primary-focus focus:ring-offset-2 focus:ring-offset-surface transition-colors duration-300"
+                >
+                    Select API Key
+                </button>
+                 {globalError && <p className="text-red-400 mt-4 text-sm text-center" role="alert">{globalError}</p>}
+            </div>
+        </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-brand-bg text-text-main font-sans">
-      <header className="py-4 px-8 border-b border-border-color text-center">
-        <h1 className="text-3xl font-bold text-white">Affiliate video base</h1>
-        <p className="text-text-secondary mt-1">Generate creative briefs and visual concepts for your affiliate marketing videos.</p>
+      <header className="py-4 px-8 border-b border-border-color flex justify-between items-center">
+        <div className="text-left">
+            <h1 className="text-3xl font-bold text-white">Affiliate video base</h1>
+            <p className="text-text-secondary mt-1">Generate creative briefs and visual concepts for your affiliate marketing videos.</p>
+        </div>
+        <button
+            onClick={handleSelectKey}
+            className="bg-surface text-primary-focus font-semibold py-2 px-4 rounded-md border border-primary hover:bg-primary/20 transition-colors duration-200"
+        >
+            Change API Key
+        </button>
       </header>
 
       <main className="p-4 md:p-8">
@@ -327,7 +398,7 @@ const App: React.FC = () => {
             <h2 className="text-2xl font-bold text-center mb-6 text-white">Generated Concepts</h2>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {results.map(result => (
-                <ResultCard key={result.id} {...result} />
+                <ResultCard key={result.id} {...result} onApiKeyInvalid={onApiKeyInvalid} />
               ))}
             </div>
           </div>

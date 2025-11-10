@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import { GoogleGenAI } from '@google/genai';
 import { BriefData, VideoPrompt } from '../types';
@@ -11,9 +12,10 @@ interface ResultCardProps {
   videoPrompt: BriefData | null;
   isLoading: boolean;
   error: string | null;
+  onApiKeyInvalid: () => void;
 }
 
-const ResultCard: React.FC<ResultCardProps> = ({ imageUrl, videoPrompt, isLoading, error }) => {
+const ResultCard: React.FC<ResultCardProps> = ({ imageUrl, videoPrompt, isLoading, error, onApiKeyInvalid }) => {
   const [showJson, setShowJson] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -104,8 +106,13 @@ ${JSON.stringify(videoPrompt)}`;
 
     } catch (e) {
         console.error("Video prompt generation failed:", e);
-        const errorMessage = e instanceof Error ? e.message : "An unknown error occurred.";
-        setPromptError(`Failed to generate video prompt. ${errorMessage}`);
+        if (e instanceof Error && e.message.includes('Requested entity was not found')) {
+            onApiKeyInvalid();
+            setPromptError('Your API key is invalid. Please select a new one.');
+        } else {
+            const errorMessage = e instanceof Error ? e.message : "An unknown error occurred.";
+            setPromptError(`Failed to generate video prompt. ${errorMessage}`);
+        }
     } finally {
         setIsGeneratingPrompt(false);
     }
