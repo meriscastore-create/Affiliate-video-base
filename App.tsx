@@ -172,7 +172,8 @@ const App: React.FC = () => {
         throw new Error("Image data not found in response.");
       }
       const base64Image = generatedImagePart.inlineData.data;
-      const imageUrl = `data:image/png;base64,${base64Image}`;
+      const mimeType = generatedImagePart.inlineData.mimeType;
+      const imageUrl = `data:${mimeType};base64,${base64Image}`;
       
       setResults(prev => prev.map(r => r.id === index ? { ...r, imageUrl, isLoading: true } : r));
       
@@ -182,7 +183,7 @@ const App: React.FC = () => {
           model: 'gemini-2.5-flash',
           contents: {
               parts: [
-                  { inlineData: { mimeType: 'image/png', data: base64Image } },
+                  { inlineData: { mimeType: mimeType, data: base64Image } },
                   { text: jsonPrompt }
               ]
           },
