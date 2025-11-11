@@ -9,9 +9,9 @@ interface GenerationSidebarProps {
   results: ResultItem[];
   isGenerating: boolean;
   generationStatus: string | null;
-  apiKey: string | null;
   handleApiError: (error: unknown) => boolean;
   onGenerateBrief: (id: number) => void;
+  onRegenerateImage: (id: number) => void;
 }
 
 const GenerationStatus: React.FC<{ status: string | null }> = ({ status }) => (
@@ -31,9 +31,9 @@ const GenerationSidebar: React.FC<GenerationSidebarProps> = ({
     results, 
     isGenerating, 
     generationStatus,
-    apiKey,
     handleApiError,
-    onGenerateBrief
+    onGenerateBrief,
+    onRegenerateImage
 }) => {
   return (
     <>
@@ -71,9 +71,9 @@ const GenerationSidebar: React.FC<GenerationSidebarProps> = ({
                   videoPrompt={result.videoPrompt} 
                   isLoading={result.isLoading}
                   error={result.error}
-                  apiKey={apiKey}
                   handleApiError={handleApiError}
                   onGenerateBrief={onGenerateBrief}
+                  onRegenerateImage={onRegenerateImage}
                 />
               ))}
             </div>

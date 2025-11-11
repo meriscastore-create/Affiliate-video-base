@@ -11,12 +11,12 @@ interface ResultCardProps {
   videoPrompt: BriefData | null;
   isLoading: boolean;
   error: string | null;
-  apiKey: string | null;
   handleApiError: (error: unknown) => boolean;
   onGenerateBrief: (id: number) => void;
+  onRegenerateImage: (id: number) => void;
 }
 
-const ResultCard: React.FC<ResultCardProps> = ({ id, imageUrl, videoPrompt, isLoading, error, apiKey, handleApiError, onGenerateBrief }) => {
+const ResultCard: React.FC<ResultCardProps> = ({ id, imageUrl, videoPrompt, isLoading, error, handleApiError, onGenerateBrief, onRegenerateImage }) => {
   const [showJson, setShowJson] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -69,8 +69,8 @@ const ResultCard: React.FC<ResultCardProps> = ({ id, imageUrl, videoPrompt, isLo
   };
 
   const handleGenerateVideoPrompt = async () => {
-    if (!videoPrompt || !apiKey) {
-        setPromptError('Kunci API tidak diatur. Harap atur di halaman utama.');
+    if (!videoPrompt) {
+        setPromptError('Data brief tidak ditemukan untuk membuat prompt video.');
         return;
     }
 
@@ -78,7 +78,7 @@ const ResultCard: React.FC<ResultCardProps> = ({ id, imageUrl, videoPrompt, isLo
     setPromptError(null);
 
     try {
-        const ai = new GoogleGenAI({ apiKey });
+        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
         const voiceOverText = videoPrompt.audio_generation_parameters.voiceover.script_lines
             .map(line => line.text)
@@ -113,8 +113,7 @@ ${JSON.stringify(videoPrompt)}`;
         }
 
     } catch (e) {
-        const isApiKeyError = handleApiError(e);
-        if (!isApiKeyError) {
+        if (!handleApiError(e)) {
              setPromptError('Gagal membuat prompt video. Silakan coba lagi.');
         }
     } finally {
@@ -229,10 +228,20 @@ ${JSON.stringify(videoPrompt)}`;
   return (
     <>
     <div className="bg-surface rounded-lg shadow-lg border border-border-color overflow-hidden flex flex-col animate-fadeIn">
-      <div className="w-full aspect-[9/16] bg-brand-bg flex items-center justify-center">
+      <div className="w-full aspect-[9/16] bg-brand-bg flex items-center justify-center relative group">
         {isImageLoading && <div className="w-full h-full bg-surface animate-pulse"></div>}
         {error && !imageUrl && <div className="p-4 text-center text-red-400 text-sm">{error}</div>}
         {imageUrl && <img src={imageUrl} alt="Generated content" className="w-full h-full object-cover" />}
+        {imageUrl && !isLoading && (
+            <button 
+                onClick={() => onRegenerateImage(id)} 
+                className="absolute top-2 right-2 bg-black/60 p-2 rounded-full text-white opacity-0 group-hover:opacity-100 transition-all duration-200 hover:bg-primary focus:opacity-100"
+                aria-label="Regenerate Image"
+                title="Regenerate Image"
+            >
+                <RegenerateIcon className="h-5 w-5" />
+            </button>
+        )}
       </div>
       <div className="p-4 flex-grow flex flex-col">
        {renderContent()}
