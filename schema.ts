@@ -1,3 +1,4 @@
+
 import { Type } from "@google/genai";
 
 export const videoPromptSchema = {
@@ -9,7 +10,6 @@ export const videoPromptSchema = {
     lighting: { type: Type.STRING, description: "e.g., 'soft golden hour light', 'dramatic neon'." },
     duration: { type: Type.INTEGER, description: "Video duration in seconds, typically 8." },
     aspect_ratio: { type: Type.STRING, description: "e.g., '16:9', '9:16'." },
-    sound: { type: Type.STRING, description: "Description of the background audio or sound effects." },
     voice_over: {
         type: Type.OBJECT,
         properties: {
@@ -19,7 +19,7 @@ export const videoPromptSchema = {
         required: ["language", "text"]
     }
   },
-  required: ["prompt", "style", "camera_motion", "lighting", "duration", "aspect_ratio", "sound", "voice_over"]
+  required: ["prompt", "style", "camera_motion", "lighting", "duration", "aspect_ratio", "voice_over"]
 };
 
 
@@ -185,6 +185,7 @@ export const briefDataSchema = {
                 },
               },
             },
+            custom_voice_model_id: { type: Type.STRING, description: "ID for a custom voice model, or null if not used." },
           },
         },
         background_music: {
@@ -194,7 +195,10 @@ export const briefDataSchema = {
             mood: { type: Type.STRING },
             intensity: { type: Type.STRING },
             volume_level: { type: Type.STRING },
-            track_suggestions: { type: Type.ARRAY, items: { type: Type.STRING } },
+            track_suggestions: { 
+              type: Type.ARRAY, 
+              items: { type: Type.STRING } 
+            },
           },
         },
       },

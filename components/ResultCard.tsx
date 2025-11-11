@@ -1,10 +1,8 @@
-
 import React, { useState } from 'react';
 import { GoogleGenAI } from '@google/genai';
 import { BriefData, VideoPrompt } from '../types';
 import { videoPromptSchema } from '../schema';
-import { DownloadIcon, CopyIcon, CodeIcon, VideoIcon } from './Icons';
-import Loader from './Loader';
+import { DownloadIcon, CopyIcon, CodeIcon, VideoIcon, RegenerateIcon } from './Icons';
 import ImageCropModal from './ImageCropModal';
 
 interface ResultCardProps {
@@ -12,10 +10,9 @@ interface ResultCardProps {
   videoPrompt: BriefData | null;
   isLoading: boolean;
   error: string | null;
-  onApiKeyInvalid: () => void;
 }
 
-const ResultCard: React.FC<ResultCardProps> = ({ imageUrl, videoPrompt, isLoading, error, onApiKeyInvalid }) => {
+const ResultCard: React.FC<ResultCardProps> = ({ imageUrl, videoPrompt, isLoading, error }) => {
   const [showJson, setShowJson] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -26,6 +23,10 @@ const ResultCard: React.FC<ResultCardProps> = ({ imageUrl, videoPrompt, isLoadin
   
   const [isCropModalOpen, setIsCropModalOpen] = useState(false);
   const [imageToCrop, setImageToCrop] = useState<string | null>(null);
+
+  const videoPromptString = generatedVideoPrompt ? JSON.stringify(generatedVideoPrompt, null, 2) : '';
+  const promptLength = videoPromptString.length;
+  const isOverLimit = promptLength > 1000;
 
 
   const handleCopyBrief = () => {
@@ -68,7 +69,6 @@ const ResultCard: React.FC<ResultCardProps> = ({ imageUrl, videoPrompt, isLoadin
 
     setIsGeneratingPrompt(true);
     setPromptError(null);
-    setGeneratedVideoPrompt(null);
 
     try {
         const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
@@ -77,11 +77,12 @@ const ResultCard: React.FC<ResultCardProps> = ({ imageUrl, videoPrompt, isLoadin
             .map(line => line.text)
             .join(' ');
 
-        const generationPrompt = `Based on the following detailed video brief JSON, generate a new, concise video generation prompt JSON.
+        const generationPrompt = `Based on the following detailed video brief, generate a new, concise video generation prompt JSON.
 This new JSON must strictly adhere to the provided schema.
-- The 'prompt' field is a descriptive paragraph summarizing the visual scene. IMPORTANT: This description MUST include a phrase explicitly stating that the character is lip-syncing to the voice-over audio (e.g., 'the influencer is seen lip-syncing to the audio').
+IMPORTANT: The entire final JSON output MUST be less than 1000 characters long. Be very concise.
+- The 'prompt' field must be a descriptive paragraph that crafts a compelling visual hook, making it feel authentic and like it's from a real content creator. It MUST include a phrase explicitly stating that the character is lip-syncing to the voice-over audio (e.g., 'the influencer is seen lip-syncing to the audio').
 - The 'voice_over.text' field must be this exact string: "${voiceOverText}"
-- Keep all string values concise.
+- Keep all string values concise and engaging.
 - The entire output must be a single, valid JSON object with no extra characters or formatting.
 
 Detailed Brief for context:
@@ -106,11 +107,10 @@ ${JSON.stringify(videoPrompt)}`;
 
     } catch (e) {
         console.error("Video prompt generation failed:", e);
-        if (e instanceof Error && e.message.includes('Requested entity was not found')) {
-            onApiKeyInvalid();
-            setPromptError('Your API key is invalid. Please select a new one.');
+        const errorMessage = e instanceof Error ? e.message : "An unknown error occurred.";
+        if (errorMessage.includes('API key not valid') || errorMessage.includes('Requested entity was not found')) {
+            setPromptError('Your API key is invalid. Please check your configuration.');
         } else {
-            const errorMessage = e instanceof Error ? e.message : "An unknown error occurred.";
             setPromptError(`Failed to generate video prompt. ${errorMessage}`);
         }
     } finally {
@@ -120,14 +120,20 @@ ${JSON.stringify(videoPrompt)}`;
 
   return (
     <>
-    <div className="bg-surface rounded-lg shadow-lg border border-border-color overflow-hidden flex flex-col">
+    <div className="bg-surface rounded-lg shadow-lg border border-border-color overflow-hidden flex flex-col animate-fadeIn">
       <div className="w-full aspect-[9/16] bg-brand-bg flex items-center justify-center">
-        {isLoading && <Loader />}
+        {isLoading && !imageUrl && !error && <div className="w-full h-full bg-surface animate-pulse"></div>}
         {error && !isLoading && <div className="p-4 text-center text-red-400 text-sm">{error}</div>}
-        {imageUrl && !isLoading && <img src={imageUrl} alt="Generated content" className="w-full h-full object-cover" />}
+        {imageUrl && <img src={imageUrl} alt="Generated content" className="w-full h-full object-cover" />}
       </div>
       <div className="p-4 flex-grow flex flex-col">
-        {videoPrompt && (
+        {isLoading && !videoPrompt ? (
+            <div className="space-y-3">
+                <div className="h-4 bg-border-color rounded w-3/4 animate-pulse"></div>
+                <div className="h-3 bg-border-color rounded w-full animate-pulse"></div>
+                <div className="h-3 bg-border-color rounded w-1/2 animate-pulse"></div>
+            </div>
+        ) : videoPrompt && (
           <>
             <div className="flex-grow">
                 <h4 className="font-bold text-white">{videoPrompt.title}</h4>
@@ -166,11 +172,16 @@ ${JSON.stringify(videoPrompt)}`;
                 {promptError && <p className="text-red-400 text-xs text-center">{promptError}</p>}
                 {generatedVideoPrompt && (
                     <div className="mt-2 relative">
-                         <h5 className="text-sm font-semibold mb-2 text-white">Video Prompt JSON</h5>
+                         <div className="flex justify-between items-center mb-2">
+                            <h5 className="text-sm font-semibold text-white">Video Prompt JSON</h5>
+                            <span className={`text-xs font-mono ${isOverLimit ? 'text-red-400 font-bold' : 'text-text-secondary'}`}>
+                                {promptLength} / 1000
+                            </span>
+                        </div>
                         <textarea
                             readOnly
                             className="w-full h-40 bg-brand-bg border border-border-color rounded-md p-2 text-xs font-mono resize-none"
-                            value={JSON.stringify(generatedVideoPrompt, null, 2)}
+                            value={videoPromptString}
                         />
                         <div className="absolute top-8 right-2 flex flex-col gap-2">
                            <button onClick={handleCopyVideoPrompt} className="flex items-center text-xs bg-surface text-text-secondary px-2 py-1 rounded hover:bg-brand-bg">
@@ -180,6 +191,16 @@ ${JSON.stringify(videoPrompt)}`;
                                 <DownloadIcon />
                             </button>
                         </div>
+                        {isOverLimit && (
+                            <button 
+                                onClick={handleGenerateVideoPrompt} 
+                                disabled={isGeneratingPrompt}
+                                className="w-full mt-2 flex items-center justify-center text-sm bg-yellow-500/20 text-yellow-400 font-bold py-2 px-2 rounded-md hover:bg-yellow-500/40 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                                <RegenerateIcon />
+                                {isGeneratingPrompt ? 'Regenerating...' : 'Regenerate (Over Limit)'}
+                            </button>
+                        )}
                     </div>
                 )}
             </div>
