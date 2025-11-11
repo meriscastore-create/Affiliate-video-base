@@ -11,6 +11,7 @@ interface GenerationSidebarProps {
   generationStatus: string | null;
   apiKey: string | null;
   handleApiError: (error: unknown) => boolean;
+  onGenerateBrief: (id: number) => void;
 }
 
 const GenerationStatus: React.FC<{ status: string | null }> = ({ status }) => (
@@ -31,7 +32,8 @@ const GenerationSidebar: React.FC<GenerationSidebarProps> = ({
     isGenerating, 
     generationStatus,
     apiKey,
-    handleApiError
+    handleApiError,
+    onGenerateBrief
 }) => {
   return (
     <>
@@ -57,19 +59,21 @@ const GenerationSidebar: React.FC<GenerationSidebarProps> = ({
         </div>
 
         <div className="flex-1 overflow-y-auto p-4 md:p-6">
-          {isGenerating && <GenerationStatus status={generationStatus} />}
+          {isGenerating && results.every(r => r.isLoading) && <GenerationStatus status={generationStatus} />}
           
           {results.length > 0 ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 gap-6">
               {results.map(result => (
                 <ResultCard 
-                  key={result.id} 
+                  key={result.id}
+                  id={result.id}
                   imageUrl={result.imageUrl} 
                   videoPrompt={result.videoPrompt} 
                   isLoading={result.isLoading}
                   error={result.error}
                   apiKey={apiKey}
                   handleApiError={handleApiError}
+                  onGenerateBrief={onGenerateBrief}
                 />
               ))}
             </div>

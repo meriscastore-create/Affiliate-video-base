@@ -6,15 +6,17 @@ import { DownloadIcon, CopyIcon, CodeIcon, VideoIcon, RegenerateIcon } from './I
 import ImageCropModal from './ImageCropModal';
 
 interface ResultCardProps {
+  id: number;
   imageUrl: string | null;
   videoPrompt: BriefData | null;
   isLoading: boolean;
   error: string | null;
   apiKey: string | null;
   handleApiError: (error: unknown) => boolean;
+  onGenerateBrief: (id: number) => void;
 }
 
-const ResultCard: React.FC<ResultCardProps> = ({ imageUrl, videoPrompt, isLoading, error, apiKey, handleApiError }) => {
+const ResultCard: React.FC<ResultCardProps> = ({ id, imageUrl, videoPrompt, isLoading, error, apiKey, handleApiError, onGenerateBrief }) => {
   const [showJson, setShowJson] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -122,25 +124,32 @@ ${JSON.stringify(videoPrompt)}`;
   
   const isImageLoading = isLoading && !imageUrl;
   const isBriefLoading = isLoading && !!imageUrl;
+  const needsBriefGeneration = !!imageUrl && !videoPrompt && !isLoading && !error;
 
-  return (
-    <>
-    <div className="bg-surface rounded-lg shadow-lg border border-border-color overflow-hidden flex flex-col animate-fadeIn">
-      <div className="w-full aspect-[9/16] bg-brand-bg flex items-center justify-center">
-        {isImageLoading && <div className="w-full h-full bg-surface animate-pulse"></div>}
-        {error && !imageUrl && <div className="p-4 text-center text-red-400 text-sm">{error}</div>}
-        {imageUrl && <img src={imageUrl} alt="Generated content" className="w-full h-full object-cover" />}
-      </div>
-      <div className="p-4 flex-grow flex flex-col">
-        {isBriefLoading ? (
-            <div className="space-y-3">
-                <div className="h-4 bg-border-color rounded w-3/4 animate-pulse"></div>
-                <div className="h-3 bg-border-color rounded w-full animate-pulse"></div>
-                <div className="h-3 bg-border-color rounded w-1/2 animate-pulse"></div>
-            </div>
-        ) : error && imageUrl ? (
-            <div className="p-4 text-center text-red-400 text-sm">{error}</div>
-        ) : videoPrompt && (
+  const renderContent = () => {
+    if (isBriefLoading) {
+      return (
+        <div className="space-y-3">
+            <div className="h-4 bg-border-color rounded w-3/4 animate-pulse"></div>
+            <div className="h-3 bg-border-color rounded w-full animate-pulse"></div>
+            <div className="h-3 bg-border-color rounded w-1/2 animate-pulse"></div>
+        </div>
+      );
+    }
+    if (error) {
+      return <div className="p-4 text-center text-red-400 text-sm">{error}</div>
+    }
+    if (needsBriefGeneration) {
+      return (
+        <div className="mt-4 pt-4 border-t border-border-color">
+          <button onClick={() => onGenerateBrief(id)} className="w-full flex items-center justify-center text-sm bg-primary/20 text-primary-focus font-bold py-2 px-2 rounded-md hover:bg-primary/40 transition-colors">
+            Hasilkan Brief Kreatif
+          </button>
+        </div>
+      );
+    }
+    if (videoPrompt) {
+      return (
           <>
             <div className="flex-grow">
                 <h4 className="font-bold text-white">{videoPrompt.title}</h4>
@@ -212,7 +221,21 @@ ${JSON.stringify(videoPrompt)}`;
                 )}
             </div>
           </>
-        )}
+      );
+    }
+    return null;
+  }
+
+  return (
+    <>
+    <div className="bg-surface rounded-lg shadow-lg border border-border-color overflow-hidden flex flex-col animate-fadeIn">
+      <div className="w-full aspect-[9/16] bg-brand-bg flex items-center justify-center">
+        {isImageLoading && <div className="w-full h-full bg-surface animate-pulse"></div>}
+        {error && !imageUrl && <div className="p-4 text-center text-red-400 text-sm">{error}</div>}
+        {imageUrl && <img src={imageUrl} alt="Generated content" className="w-full h-full object-cover" />}
+      </div>
+      <div className="p-4 flex-grow flex flex-col">
+       {renderContent()}
       </div>
     </div>
     {isCropModalOpen && imageToCrop && (

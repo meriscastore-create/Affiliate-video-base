@@ -19,6 +19,7 @@ import {
 export type ResultItem = {
   id: number;
   imageUrl: string | null;
+  mimeType: string | null;
   videoPrompt: BriefData | null;
   isLoading: boolean;
   error: string | null;
@@ -164,8 +165,30 @@ const App: React.FC = () => {
       return false; // It was a different error
   }
   
-  const generateBriefForResult = async (ai: GoogleGenAI, index: number, generatedImage: { imageUrl: string, mimeType: string }, previousScript: string | null = null) => {
+  const handleGenerateBrief = async (id: number) => {
+      if (!apiKey) return;
+      const resultItem = results.find(r => r.id === id);
+      if (!resultItem || !resultItem.imageUrl || !resultItem.mimeType) return;
+      
+      setResults(prev => prev.map(r => r.id === id ? { ...r, isLoading: true, error: null } : r));
+      
       try {
+        const ai = new GoogleGenAI({ apiKey });
+
+        let previousScript: string | null = null;
+        if (isStorytellingMode && !isNoModelMode) {
+            const previousResult = results
+                .slice(0, id)
+                .reverse()
+                .find(r => r.videoPrompt);
+            
+            if (previousResult && previousResult.videoPrompt) {
+                previousScript = previousResult.videoPrompt.audio_generation_parameters.voiceover.script_lines
+                    .map(line => line.text)
+                    .join(' ');
+            }
+        }
+
         let jsonPrompt = `As a creative strategist, create a detailed JSON brief for a short vertical video (TikTok/Reel).
 Campaign Title: ${campaignTitle}.
 Product Category: ${productCategory}.`;
@@ -212,7 +235,7 @@ Product Category: ${productCategory}.`;
             model: 'gemini-2.5-flash',
             contents: {
                 parts: [
-                    { inlineData: { mimeType: generatedImage.mimeType, data: generatedImage.imageUrl.split(',')[1] } },
+                    { inlineData: { mimeType: resultItem.mimeType, data: resultItem.imageUrl.split(',')[1] } },
                     { text: jsonPrompt }
                 ]
             },
@@ -223,16 +246,14 @@ Product Category: ${productCategory}.`;
         });
         
         const videoPrompt = JSON.parse(jsonResponse.text);
-        setResults(prev => prev.map(r => r.id === index ? { ...r, videoPrompt, isLoading: false, error: null } : r));
-        return videoPrompt;
+        setResults(prev => prev.map(r => r.id === id ? { ...r, videoPrompt, isLoading: false, error: null } : r));
       } catch (error) {
-        console.error(`Error generating brief for result ${index}:`, error);
+        console.error(`Error generating brief for result ${id}:`, error);
          if (error instanceof Error && (error.message.includes('API key not valid') || error.message.includes('Requested entity was not found'))) {
-          handleApiError(error); // This will handle the global API key error state
+          handleApiError(error);
         } else {
-          setResults(prev => prev.map(r => r.id === index ? { ...r, isLoading: false, error: 'Gagal membuat brief.' } : r));
+          setResults(prev => prev.map(r => r.id === id ? { ...r, isLoading: false, error: 'Gagal membuat brief.' } : r));
         }
-        return null;
       }
   }
 
@@ -251,6 +272,7 @@ Product Category: ${productCategory}.`;
     const initialResults: ResultItem[] = Array.from({ length: numConcepts }, (_, i) => ({
       id: i,
       imageUrl: null,
+      mimeType: null,
       videoPrompt: null,
       isLoading: true,
       error: null,
@@ -333,7 +355,7 @@ Your primary and most critical task is to create a photorealistic, 100% accurate
         return `${identityConstraint} ${scenePrompt} ${creativePrompt}`;
       });
 
-      const generateImageAndBrief = async (prompt: string, index: number, previousScript: string | null = null) => {
+      const generateImage = async (prompt: string, index: number) => {
         const localAi = new GoogleGenAI({ apiKey });
         try {
             const requestParts = [];
@@ -368,12 +390,7 @@ Your primary and most critical task is to create a photorealistic, 100% accurate
             const mimeType = generatedImagePart.inlineData.mimeType;
             const imageUrl = `data:${mimeType};base64,${base64Image}`;
             
-            // Immediately update UI with the generated image
-            setResults(prev => prev.map(r => r.id === index ? { ...r, imageUrl, isLoading: true } : r));
-
-            // Now, generate the brief
-            const videoPrompt = await generateBriefForResult(localAi, index, { imageUrl, mimeType }, previousScript);
-            return videoPrompt;
+            setResults(prev => prev.map(r => r.id === index ? { ...r, imageUrl, mimeType, isLoading: false } : r));
 
         } catch (error) {
             console.error(`Error generating image for result ${index}:`, error);
@@ -382,26 +399,13 @@ Your primary and most critical task is to create a photorealistic, 100% accurate
             } else {
                 setResults(prev => prev.map(r => r.id === index ? { ...r, isLoading: false, error: 'Generasi Gagal.' } : r));
             }
-            return null;
         }
       }
 
-      if (isStorytellingMode && !isNoModelMode) {
-        let previousScript: string | null = null;
-        for (const [index, imageGenPrompt] of imagePrompts.entries()) {
-            const videoPrompt = await generateImageAndBrief(imageGenPrompt, index, previousScript);
-            if (videoPrompt) {
-                previousScript = videoPrompt.audio_generation_parameters.voiceover.script_lines
-                    .map(line => line.text)
-                    .join(' ');
-            }
-        }
-      } else {
-        const generationPromises = imagePrompts.map((prompt, index) => 
-          generateImageAndBrief(prompt, index)
-        );
-        await Promise.all(generationPromises);
-      }
+      const generationPromises = imagePrompts.map((prompt, index) => 
+        generateImage(prompt, index)
+      );
+      await Promise.all(generationPromises);
 
     } catch (e) {
       const isApiKeyError = handleApiError(e);
@@ -627,6 +631,7 @@ Your primary and most critical task is to create a photorealistic, 100% accurate
           generationStatus={generationStatus}
           apiKey={apiKey}
           handleApiError={handleApiError}
+          onGenerateBrief={handleGenerateBrief}
         />
       </div>
     </div>
