@@ -163,6 +163,78 @@ const App: React.FC = () => {
       }
       return false; // It was a different error
   }
+  
+  const generateBriefForResult = async (ai: GoogleGenAI, index: number, generatedImage: { imageUrl: string, mimeType: string }, previousScript: string | null = null) => {
+      try {
+        let jsonPrompt = `As a creative strategist, create a detailed JSON brief for a short vertical video (TikTok/Reel).
+Campaign Title: ${campaignTitle}.
+Product Category: ${productCategory}.`;
+
+        if (productDescription.trim()) {
+          jsonPrompt += `\nProduct Description: ${productDescription}.`;
+        }
+        
+        jsonPrompt += `\nInstructions:`;
+        if(isNoModelMode) {
+          jsonPrompt += `\n- This is a PRODUCT-ONLY video. Do not include any people, models, or influencers in the concept.
+- The tone must be clean, engaging, and focused on the product's features and aesthetic.`;
+        } else {
+          jsonPrompt += `\n- The concept should feature an influencer.
+- The tone must be conversational, authentic, and relatable (like a real content creator), not a hard-sell advertisement.`
+        }
+
+        jsonPrompt += `
+- The script must be in Indonesian.
+- The entire output must be a single JSON object that strictly follows the provided schema.
+- Include creative and fitting suggestions for background music based on the overall mood.
+- Ensure the description and script lines are concise and engaging.
+- **CRITICAL**: The voiceover script MUST follow this 9-part structure:
+    1. HOOK: A scroll-stopping opening line.
+    2. PROBLEM: The audience's pain point.
+    3. PRODUCT INTRO: Introduce the product.
+    4. BENEFIT 1: Main advantage.
+    5. BENEFIT 2: Secondary advantage.
+    6. DEMO / HOW-TO: Show it in action.
+    7. SOCIAL PROOF: A quick testimonial or stat.
+    8. OFFER / URGENCY: The deal.
+    9. CTA: Call to Action.
+- The total length of all combined script lines must be ${voiceoverStyle === 'Simpel' ? 'less than 170 characters for a SIMPLE style.' : 'less than 300 characters for a DETAILED style.'}`;
+        
+        if (productReviews.trim()) {
+          jsonPrompt += `\n\n- INSPIRATION: Use the following customer reviews as strong inspiration for the voiceover script lines (especially for the 'Social Proof' part):\n${productReviews}`;
+        }
+
+        if (previousScript) {
+          jsonPrompt += `\n\nIMPORTANT CONTEXT: This video is part of a sequence. The script for the PREVIOUS video was: "${previousScript}". Please generate a new script that continues this story logically and creatively.`;
+        }
+
+        const jsonResponse = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: {
+                parts: [
+                    { inlineData: { mimeType: generatedImage.mimeType, data: generatedImage.imageUrl.split(',')[1] } },
+                    { text: jsonPrompt }
+                ]
+            },
+            config: {
+                responseMimeType: "application/json",
+                responseSchema: briefDataSchema,
+            }
+        });
+        
+        const videoPrompt = JSON.parse(jsonResponse.text);
+        setResults(prev => prev.map(r => r.id === index ? { ...r, videoPrompt, isLoading: false, error: null } : r));
+        return videoPrompt;
+      } catch (error) {
+        console.error(`Error generating brief for result ${index}:`, error);
+         if (error instanceof Error && (error.message.includes('API key not valid') || error.message.includes('Requested entity was not found'))) {
+          handleApiError(error); // This will handle the global API key error state
+        } else {
+          setResults(prev => prev.map(r => r.id === index ? { ...r, isLoading: false, error: 'Gagal membuat brief.' } : r));
+        }
+        return null;
+      }
+  }
 
   const handleGenerate = async () => {
     if (!apiKey) {
@@ -261,25 +333,72 @@ Your primary and most critical task is to create a photorealistic, 100% accurate
         return `${identityConstraint} ${scenePrompt} ${creativePrompt}`;
       });
 
+      const generateImageAndBrief = async (prompt: string, index: number, previousScript: string | null = null) => {
+        const localAi = new GoogleGenAI({ apiKey });
+        try {
+            const requestParts = [];
+            if (!isNoModelMode) {
+                const modelParts = modelImages.filter((img): img is ImageState => img !== null).map(img => ({ inlineData: { mimeType: img.mimeType, data: img.data.split(',')[1] } }));
+                requestParts.push(...modelParts);
+            }
+            const productParts = productImages.filter((img): img is ImageState => img !== null).map(img => ({ inlineData: { mimeType: img.mimeType, data: img.data.split(',')[1] } }));
+            requestParts.push(...productParts);
+            
+            let finalImageGenPrompt = prompt;
+            let selectedAngle = cameraAngle;
+            if (cameraAngle === 'Random (Auto)' && !isStorytellingMode) {
+                selectedAngle = CAMERA_ANGLE_OPTIONS[Math.floor(Math.random() * (CAMERA_ANGLE_OPTIONS.length - 1)) + 1];
+            }
+            if (selectedAngle !== 'Random (Auto)') {
+                finalImageGenPrompt += ` The shot must be a ${selectedAngle}.`;
+            }
+            requestParts.push({ text: finalImageGenPrompt });
+
+            const imageResponse = await localAi.models.generateContent({
+                model: 'gemini-2.5-flash-image',
+                contents: { parts: requestParts },
+                config: { responseModalities: [Modality.IMAGE] },
+            });
+
+            const generatedImagePart = imageResponse.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
+            if (!generatedImagePart || !generatedImagePart.inlineData?.data) {
+                throw new Error("Data gambar tidak ditemukan dalam respons.");
+            }
+            const base64Image = generatedImagePart.inlineData.data;
+            const mimeType = generatedImagePart.inlineData.mimeType;
+            const imageUrl = `data:${mimeType};base64,${base64Image}`;
+            
+            // Immediately update UI with the generated image
+            setResults(prev => prev.map(r => r.id === index ? { ...r, imageUrl, isLoading: true } : r));
+
+            // Now, generate the brief
+            const videoPrompt = await generateBriefForResult(localAi, index, { imageUrl, mimeType }, previousScript);
+            return videoPrompt;
+
+        } catch (error) {
+            console.error(`Error generating image for result ${index}:`, error);
+            if (error instanceof Error && (error.message.includes('API key not valid') || error.message.includes('Requested entity was not found'))) {
+                handleApiError(error);
+            } else {
+                setResults(prev => prev.map(r => r.id === index ? { ...r, isLoading: false, error: 'Generasi Gagal.' } : r));
+            }
+            return null;
+        }
+      }
+
       if (isStorytellingMode && !isNoModelMode) {
         let previousScript: string | null = null;
         for (const [index, imageGenPrompt] of imagePrompts.entries()) {
-            const result = await generateSingleResult(
-                ai, imageGenPrompt, index, modelImages, productImages, campaignTitle, productDescription, productReviews, previousScript, cameraAngle, isNoModelMode, apiKey
-            );
-            setResults(prev => prev.map(r => (r.id === result.id ? result : r)));
-            if (result.videoPrompt) {
-                previousScript = result.videoPrompt.audio_generation_parameters.voiceover.script_lines
+            const videoPrompt = await generateImageAndBrief(imageGenPrompt, index, previousScript);
+            if (videoPrompt) {
+                previousScript = videoPrompt.audio_generation_parameters.voiceover.script_lines
                     .map(line => line.text)
                     .join(' ');
             }
         }
       } else {
         const generationPromises = imagePrompts.map((prompt, index) => 
-          generateSingleResult(ai, prompt, index, modelImages, productImages, campaignTitle, productDescription, productReviews, null, cameraAngle, isNoModelMode, apiKey).then(result => {
-              setResults(prev => prev.map(r => (r.id === result.id ? result : r)));
-              return result;
-          })
+          generateImageAndBrief(prompt, index)
         );
         await Promise.all(generationPromises);
       }
@@ -293,121 +412,6 @@ Your primary and most critical task is to create a photorealistic, 100% accurate
     } finally {
       setIsGenerating(false);
       setGenerationStatus(null);
-    }
-  };
-  
-  const generateSingleResult = async (ai: GoogleGenAI, imageGenPrompt: string, index: number, modelImgs: (ImageState | null)[], prodImgs: (ImageState | null)[], title: string, description: string, reviews: string, previousScript: string | null = null, angle: string, noModelMode: boolean, apiKey: string): Promise<ResultItem> => {
-    const localAi = new GoogleGenAI({ apiKey });
-    
-    try {
-      const requestParts = [];
-
-      if (!noModelMode) {
-        const modelParts = modelImgs
-          .filter((img): img is ImageState => img !== null)
-          .map(img => ({ inlineData: { mimeType: img.mimeType, data: img.data.split(',')[1] } }));
-        requestParts.push(...modelParts);
-      }
-      
-      const productParts = prodImgs
-        .filter((img): img is ImageState => img !== null)
-        .map(img => ({ inlineData: { mimeType: img.mimeType, data: img.data.split(',')[1] } }));
-
-      requestParts.push(...productParts);
-
-      let finalImageGenPrompt = imageGenPrompt;
-      let selectedAngle = angle;
-      if (angle === 'Random (Auto)' && !isStorytellingMode) {
-        selectedAngle = CAMERA_ANGLE_OPTIONS[Math.floor(Math.random() * (CAMERA_ANGLE_OPTIONS.length - 1)) + 1];
-      }
-      if (selectedAngle !== 'Random (Auto)') {
-        finalImageGenPrompt += ` The shot must be a ${selectedAngle}.`;
-      }
-      
-      requestParts.push({ text: finalImageGenPrompt });
-
-      // Sesuai permintaan Anda, menggunakan "nano banana" yang sesuai dengan model 'gemini-2.5-flash-image'.
-      const imageResponse = await localAi.models.generateContent({
-          model: 'gemini-2.5-flash-image',
-          contents: { parts: requestParts },
-          config: { responseModalities: [Modality.IMAGE] },
-      });
-      
-      const generatedImagePart = imageResponse.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
-      if (!generatedImagePart || !generatedImagePart.inlineData?.data) {
-        throw new Error("Image data not found in response.");
-      }
-      const base64Image = generatedImagePart.inlineData.data;
-      const mimeType = generatedImagePart.inlineData.mimeType;
-      const imageUrl = `data:${mimeType};base64,${base64Image}`;
-      
-      setResults(prev => prev.map(r => r.id === index ? { ...r, imageUrl, isLoading: true } : r));
-      
-      let jsonPrompt = `As a creative strategist, create a detailed JSON brief for a short vertical video (TikTok/Reel).
-Campaign Title: ${title}.
-Product Category: ${productCategory}.`;
-
-      if (description.trim()) {
-        jsonPrompt += `\nProduct Description: ${description}.`;
-      }
-      
-      jsonPrompt += `\nInstructions:`;
-      if(noModelMode) {
-        jsonPrompt += `\n- This is a PRODUCT-ONLY video. Do not include any people, models, or influencers in the concept.
-- The tone must be clean, engaging, and focused on the product's features and aesthetic.`;
-      } else {
-        jsonPrompt += `\n- The concept should feature an influencer.
-- The tone must be conversational, authentic, and relatable (like a real content creator), not a hard-sell advertisement.`
-      }
-
-      jsonPrompt += `
-- The script must be in Indonesian.
-- The entire output must be a single JSON object that strictly follows the provided schema.
-- Include creative and fitting suggestions for background music based on the overall mood.
-- Ensure the description and script lines are concise and engaging.
-- **CRITICAL**: The voiceover script MUST follow this 9-part structure:
-    1. HOOK: A scroll-stopping opening line.
-    2. PROBLEM: The audience's pain point.
-    3. PRODUCT INTRO: Introduce the product.
-    4. BENEFIT 1: Main advantage.
-    5. BENEFIT 2: Secondary advantage.
-    6. DEMO / HOW-TO: Show it in action.
-    7. SOCIAL PROOF: A quick testimonial or stat.
-    8. OFFER / URGENCY: The deal.
-    9. CTA: Call to Action.
-- The total length of all combined script lines must be ${voiceoverStyle === 'Simpel' ? 'less than 170 characters for a SIMPLE style.' : 'less than 300 characters for a DETAILED style.'}`;
-      
-      if (reviews.trim()) {
-        jsonPrompt += `\n\n- INSPIRATION: Use the following customer reviews as strong inspiration for the voiceover script lines (especially for the 'Social Proof' part):\n${reviews}`;
-      }
-
-      if (previousScript) {
-        jsonPrompt += `\n\nIMPORTANT CONTEXT: This video is part of a sequence. The script for the PREVIOUS video was: "${previousScript}". Please generate a new script that continues this story logically and creatively.`;
-      }
-
-      const jsonResponse = await localAi.models.generateContent({
-          model: 'gemini-2.5-flash',
-          contents: {
-              parts: [
-                  { inlineData: { mimeType: mimeType, data: base64Image } },
-                  { text: jsonPrompt }
-              ]
-          },
-          config: {
-              responseMimeType: "application/json",
-              responseSchema: briefDataSchema,
-          }
-      });
-      
-      const videoPrompt = JSON.parse(jsonResponse.text);
-      return { id: index, imageUrl, videoPrompt, isLoading: false, error: null };
-
-    } catch (error) {
-      console.error(`Error generating result ${index}:`, error);
-      if (error instanceof Error && (error.message.includes('API key not valid') || error.message.includes('Requested entity was not found'))) {
-        throw error;
-      }
-      return { id: index, imageUrl: null, videoPrompt: null, isLoading: false, error: 'Generasi Gagal.' };
     }
   };
 

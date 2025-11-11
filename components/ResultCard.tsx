@@ -119,22 +119,27 @@ ${JSON.stringify(videoPrompt)}`;
         setIsGeneratingPrompt(false);
     }
   };
+  
+  const isImageLoading = isLoading && !imageUrl;
+  const isBriefLoading = isLoading && !!imageUrl;
 
   return (
     <>
     <div className="bg-surface rounded-lg shadow-lg border border-border-color overflow-hidden flex flex-col animate-fadeIn">
       <div className="w-full aspect-[9/16] bg-brand-bg flex items-center justify-center">
-        {isLoading && !imageUrl && !error && <div className="w-full h-full bg-surface animate-pulse"></div>}
-        {error && !isLoading && <div className="p-4 text-center text-red-400 text-sm">{error}</div>}
+        {isImageLoading && <div className="w-full h-full bg-surface animate-pulse"></div>}
+        {error && !imageUrl && <div className="p-4 text-center text-red-400 text-sm">{error}</div>}
         {imageUrl && <img src={imageUrl} alt="Generated content" className="w-full h-full object-cover" />}
       </div>
       <div className="p-4 flex-grow flex flex-col">
-        {isLoading && !videoPrompt ? (
+        {isBriefLoading ? (
             <div className="space-y-3">
                 <div className="h-4 bg-border-color rounded w-3/4 animate-pulse"></div>
                 <div className="h-3 bg-border-color rounded w-full animate-pulse"></div>
                 <div className="h-3 bg-border-color rounded w-1/2 animate-pulse"></div>
             </div>
+        ) : error && imageUrl ? (
+            <div className="p-4 text-center text-red-400 text-sm">{error}</div>
         ) : videoPrompt && (
           <>
             <div className="flex-grow">
