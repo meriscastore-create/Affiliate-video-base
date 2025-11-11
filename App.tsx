@@ -387,33 +387,24 @@ Product Category: ${productCategory}.`;
   }
 
   const getIdentityProtocolPrompt = (hasAnchorImage: boolean): string => {
-        let prompt = `---
-**ADAPTIVE IDENTITY PROTOCOL V2: ABSOLUTE FIDELITY + MAXIMUM VARIATION**
+    let prompt = `**Tujuan Utama: Konsistensi Identitas.**
+Orang dalam gambar yang dihasilkan HARUS sama persis dengan orang di foto referensi.
 
-**PRIMARY DIRECTIVE: DUAL-FOCUS EXECUTION**
-1.  **IDENTITY LOCK (Non-Negotiable):** Replicate the person from the input images with 100% fidelity. This is the top priority.
-2.  **SCENE VARIATION (Creative Freedom):** Create a COMPLETELY NEW and UNIQUE scene, pose, and lighting environment based ONLY on the 'SCENE DIRECTIVE' text prompt.
-
-**INPUT HIERARCHY & EXECUTION LOGIC:**
-- **IMAGE 1 (Cropped Face):** MASTER FACE TEMPLATE. The absolute, unchangeable ground truth for all facial features.
-- **IMAGE 2 (Full Model Photo):** MASTER POSTURE & BODY TEMPLATE. Use for body type, hair style, and characteristic posture. The face MUST still conform strictly to IMAGE 1.
+- **Referensi Wajah:** Gunakan gambar close-up yang dipotong sebagai sumber mutlak untuk semua fitur wajah. Wajahnya harus identik.
+- **Referensi Tubuh & Rambut:** Gunakan foto seluruh tubuh untuk tipe tubuh, postur, dan gaya rambut.
 `;
 
-        if (hasAnchorImage) {
-            prompt += `- **IMAGE 3 (Anchor Image):** This is your VISUAL MEMORY of the person's successfully rendered identity. The person in the new image must be identical to the person here in face and body.
+    if (hasAnchorImage) {
+        prompt += `- **Pemeriksaan Konsistensi:** Orang yang dihasilkan juga harus identik dengan orang di gambar pertama yang dihasilkan (gambar jangkar). Ini adalah ingatan Anda tentang kecocokan yang berhasil.
 `;
-        }
+    }
 
-        prompt += `
-**CORE EXECUTION COMMAND:**
-Place the IDENTICAL PERSON (face and posture) from the reference images into a COMPLETELY NEW scene described in the 'SCENE DIRECTIVE' text prompt.
+    prompt += `
+**Tujuan Sekunder: Penciptaan Adegan.**
+Tempatkan orang yang identik ini ke dalam adegan baru berdasarkan prompt teks yang mengikuti. JANGAN menyalin latar belakang, pencahayaan, atau pose dari foto referensi. Buat konsep visual yang sepenuhnya baru dan unik.`;
 
-**FORBIDDEN OPERATIONS (STRICTLY ENFORCED):**
-- DO NOT copy the background, lighting, composition, or non-essential props from ANY reference image (especially IMAGE 3).
-- DO NOT average features or perform creative interpretation on the person's face or body. Replicate precisely, but create a new world around them.
----`;
-        return prompt;
-      };
+    return prompt;
+};
 
   const handleGenerate = async () => {
     if (!apiKey) {
