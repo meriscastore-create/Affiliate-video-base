@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { GoogleGenAI, Modality } from "@google/genai";
 import { BriefData } from './types';
@@ -6,6 +5,8 @@ import { briefDataSchema } from './schema';
 import ImageUploader from './components/ImageUploader';
 import GenerationSidebar from './components/GenerationSidebar';
 import FaceCropModal from './components/FaceCropModal';
+import ApiKeyModal from './components/ApiKeyModal';
+import { KeyIcon } from './components/Icons';
 import { 
   CAMERA_OPTIONS, 
   MOOD_OPTIONS, 
@@ -37,6 +38,9 @@ export type ImageState = { data: string; mimeType: string };
 const delay = (ms: number) => new Promise(res => setTimeout(res, ms));
 
 const App: React.FC = () => {
+  const [apiKey, setApiKey] = useState<string | null>(null);
+  const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState(false);
+
   const [modelImages, setModelImages] = useState<(ImageState | null)[]>(Array(5).fill(null));
   const [productImages, setProductImages] = useState<(ImageState | null)[]>(Array(6).fill(null));
   const [results, setResults] = useState<ResultItem[]>([]);
@@ -77,6 +81,21 @@ const App: React.FC = () => {
   const [imagePrompts, setImagePrompts] = useState<string[]>([]);
   const [creativePrompt, setCreativePrompt] = useState('');
 
+  useEffect(() => {
+    const storedApiKey = localStorage.getItem('gemini-api-key');
+    if (storedApiKey) {
+      setApiKey(storedApiKey);
+    } else {
+      setIsApiKeyModalOpen(true);
+    }
+  }, []);
+
+  const handleSaveApiKey = (newKey: string) => {
+    setApiKey(newKey);
+    localStorage.setItem('gemini-api-key', newKey);
+    setIsApiKeyModalOpen(false);
+    setGlobalError(null); 
+  };
 
   useEffect(() => {
     const loadFaceApiModels = async () => {
@@ -190,11 +209,13 @@ const App: React.FC = () => {
 
   const handleApiError = (error: unknown) => {
       console.error("An API error occurred:", error);
-      const errorMessage = error instanceof Error ? error.message.toLowerCase() : '';
-      if (errorMessage.includes('api key not valid') || errorMessage.includes('permission denied') || errorMessage.includes('api key is invalid') || errorMessage.includes('requested entity was not found')) {
-          setGlobalError('Terjadi masalah dengan Kunci API. Pastikan kunci API telah dikonfigurasi dengan benar di lingkungan.');
+      const errorMessage = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+      
+      if (errorMessage.includes('api key not valid') || errorMessage.includes('permission denied') || errorMessage.includes('api key is invalid') || errorMessage.includes('api_key_not_valid') || errorMessage.includes('requested entity was not found')) {
+          setGlobalError('Kunci API Anda tidak valid. Silakan periksa dan masukkan kunci yang benar dari Google AI Studio.');
+          setIsApiKeyModalOpen(true); // Re-open the modal
           setIsGenerating(false);
-          setResults(prev => prev.map(r => r.isLoading ? { ...r, isLoading: false, error: 'Kesalahan Konfigurasi API' } : r));
+          setResults(prev => prev.map(r => r.isLoading ? { ...r, isLoading: false, error: 'Kunci API tidak valid' } : r));
           setGenerationStatus(null);
           return true; // API key error was handled
       }
@@ -202,13 +223,18 @@ const App: React.FC = () => {
   }
   
   const handleGenerateBrief = async (id: number) => {
+      if (!apiKey) {
+          setIsApiKeyModalOpen(true);
+          return;
+      }
+
       const resultItem = results.find(r => r.id === id);
       if (!resultItem || !resultItem.imageUrl || !resultItem.mimeType) return;
       
       setResults(prev => prev.map(r => r.id === id ? { ...r, isLoading: true, error: null } : r));
       
       try {
-        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+        const ai = new GoogleGenAI({ apiKey });
 
         let previousScript: string | null = null;
         if (isStorytellingMode && !isNoModelMode) {
@@ -291,7 +317,12 @@ Product Category: ${productCategory}.`;
   }
 
   const generateImage = async (prompt: string, index: number, anchorImage: ImageState | null) => {
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    if (!apiKey) {
+      setIsApiKeyModalOpen(true);
+      return null;
+    }
+
+    const ai = new GoogleGenAI({ apiKey });
     try {
         const requestParts = [];
 
@@ -385,6 +416,11 @@ Place the IDENTICAL PERSON (face and posture) from the reference images into a C
       };
 
   const handleGenerate = async () => {
+    if (!apiKey) {
+      setIsApiKeyModalOpen(true);
+      setGlobalError('Silakan masukkan Kunci API Gemini Anda untuk memulai.');
+      return;
+    }
     if ((!isNoModelMode && !modelImages[0]) || !productImages[0] || !campaignTitle) {
       setGlobalError('Mohon isi kolom yang wajib diisi dan unggah foto yang diperlukan (Judul Kampanye, Foto Produk, dan Foto Model kecuali dalam mode Produk Saja).');
       return;
@@ -488,6 +524,11 @@ The product category is '${productCategory}'. Analyze ALL provided product image
 
         const newImage = await generateImage(finalPrompt, i, anchorImage);
         
+        if (newImage === null) {
+          // An error occurred (e.g., bad API key), stop the whole process.
+          break;
+        }
+
         if (i === 0 && newImage) {
           anchorImage = newImage;
         }
@@ -531,6 +572,13 @@ The product category is '${productCategory}'. Analyze ALL provided product image
 
     setGenerationStatus(`Membuat ulang gambar ${id + 1}...`);
     const newImage = await generateImage(finalPrompt, id, anchorImage);
+    
+    if (newImage === null) {
+      // API error handled inside generateImage, just stop here.
+      setIsGenerating(false);
+      setGenerationStatus(null);
+      return;
+    }
 
     if (id === 0 && newImage) {
         const newAnchor = newImage;
@@ -539,7 +587,8 @@ The product category is '${productCategory}'. Analyze ALL provided product image
             const subsequentScenePrompt = imagePrompts[i];
             const identityPrompt = getIdentityProtocolPrompt(true);
             const subsequentFinalPrompt = `${identityPrompt} ${subsequentScenePrompt} ${creativePrompt}`;
-            await generateImage(subsequentFinalPrompt, i, newAnchor);
+            const result = await generateImage(subsequentFinalPrompt, i, newAnchor);
+            if (result === null) break;
         }
     }
     setGenerationStatus(null);
@@ -549,16 +598,32 @@ The product category is '${productCategory}'. Analyze ALL provided product image
   const getButtonText = () => {
     if (isGenerating) return 'Menghasilkan...';
     if (!faceApiReady) return 'Mempersiapkan Deteksi Wajah...';
+    if (!apiKey) return 'Setel Kunci API untuk Memulai';
     return 'Hasilkan Konsep';
   };
 
+  const isGenerateDisabled = isGenerating || !faceApiReady || !apiKey || ((!isNoModelMode && !modelImages[0]) || !productImages[0] || !campaignTitle);
+
   return (
     <div className="min-h-screen bg-brand-bg text-text-main font-sans">
-      <header className="py-4 px-8 border-b border-border-color flex justify-between items-center sticky top-0 bg-brand-bg/80 backdrop-blur-sm z-10">
+      <ApiKeyModal 
+        isOpen={isApiKeyModalOpen}
+        onClose={() => setIsApiKeyModalOpen(false)}
+        onSave={handleSaveApiKey}
+        currentKey={apiKey}
+      />
+      <header className="py-4 px-8 border-b border-border-color flex justify-between items-center sticky top-0 bg-brand-bg/80 backdrop-blur-sm z-20">
         <div className="text-left">
             <h1 className="text-3xl font-bold text-white">Affiliate video base</h1>
             <p className="text-text-secondary mt-1">Buat brief kreatif dan konsep visual untuk video pemasaran afiliasi Anda.</p>
         </div>
+        <button 
+          onClick={() => setIsApiKeyModalOpen(true)}
+          className="flex items-center bg-surface px-4 py-2 rounded-lg text-sm font-semibold hover:bg-primary/20 hover:text-primary-focus focus:outline-none focus:ring-2 focus:ring-primary-focus transition-colors"
+        >
+          <KeyIcon className="h-5 w-5 mr-2" />
+          Setel Kunci API
+        </button>
       </header>
       
       {isFaceCropModalOpen && imageForFaceCrop && (
@@ -753,7 +818,7 @@ The product category is '${productCategory}'. Analyze ALL provided product image
               <div className="mt-8 text-center">
                   <button 
                       onClick={handleGenerate} 
-                      disabled={isGenerating || !faceApiReady || ((!isNoModelMode && !modelImages[0]) || !productImages[0] || !campaignTitle)}
+                      disabled={isGenerateDisabled}
                       className="bg-primary text-white font-bold py-3 px-10 rounded-lg text-lg hover:bg-primary-focus focus:outline-none focus:ring-4 focus:ring-primary-focus/50 transition-all duration-300 disabled:bg-gray-600 disabled:cursor-not-allowed shadow-lg hover:shadow-primary/40 disabled:shadow-none transform hover:-translate-y-1"
                   >
                       {getButtonText()}
@@ -772,6 +837,7 @@ The product category is '${productCategory}'. Analyze ALL provided product image
           handleApiError={handleApiError}
           onGenerateBrief={handleGenerateBrief}
           onRegenerateImage={handleRegenerateImage}
+          apiKey={apiKey}
         />
       </div>
     </div>

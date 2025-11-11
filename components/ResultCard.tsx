@@ -14,9 +14,10 @@ interface ResultCardProps {
   handleApiError: (error: unknown) => boolean;
   onGenerateBrief: (id: number) => void;
   onRegenerateImage: (id: number) => void;
+  apiKey: string | null;
 }
 
-const ResultCard: React.FC<ResultCardProps> = ({ id, imageUrl, videoPrompt, isLoading, error, handleApiError, onGenerateBrief, onRegenerateImage }) => {
+const ResultCard: React.FC<ResultCardProps> = ({ id, imageUrl, videoPrompt, isLoading, error, handleApiError, onGenerateBrief, onRegenerateImage, apiKey }) => {
   const [showJson, setShowJson] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -69,6 +70,10 @@ const ResultCard: React.FC<ResultCardProps> = ({ id, imageUrl, videoPrompt, isLo
   };
 
   const handleGenerateVideoPrompt = async () => {
+    if (!apiKey) {
+        setPromptError('Kunci API tidak diatur.');
+        return;
+    }
     if (!videoPrompt) {
         setPromptError('Data brief tidak ditemukan untuk membuat prompt video.');
         return;
@@ -78,7 +83,7 @@ const ResultCard: React.FC<ResultCardProps> = ({ id, imageUrl, videoPrompt, isLo
     setPromptError(null);
 
     try {
-        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+        const ai = new GoogleGenAI({ apiKey });
 
         const voiceOverText = videoPrompt.audio_generation_parameters.voiceover.script_lines
             .map(line => line.text)
