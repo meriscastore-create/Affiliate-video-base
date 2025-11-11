@@ -4,6 +4,7 @@ import { BriefData } from './types';
 import { briefDataSchema } from './schema';
 import ImageUploader from './components/ImageUploader';
 import GenerationSidebar from './components/GenerationSidebar';
+import ApiKeyModal from './components/ApiKeyModal';
 import { 
   CAMERA_OPTIONS, 
   MOOD_OPTIONS, 
@@ -34,6 +35,9 @@ const App: React.FC = () => {
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
   const [globalError, setGlobalError] = useState<string | null>(null);
   
+  const [apiKey, setApiKey] = useState<string | null>(null);
+  const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState(false);
+
   const [campaignTitle, setCampaignTitle] = useState('');
   const [productDescription, setProductDescription] = useState('');
   const [productReviews, setProductReviews] = useState('');
@@ -55,6 +59,15 @@ const App: React.FC = () => {
   
   const [viewMode, setViewMode] = useState<'form' | 'results'>('form');
   const [generationStatus, setGenerationStatus] = useState<string | null>(null);
+
+  useEffect(() => {
+    const storedApiKey = localStorage.getItem('gemini-api-key');
+    if (storedApiKey) {
+      setApiKey(storedApiKey);
+    } else {
+      setIsApiKeyModalOpen(true);
+    }
+  }, []);
 
 
   useEffect(() => {
@@ -123,8 +136,40 @@ const App: React.FC = () => {
         return newImages;
     });
   };
+  
+  const handleSaveApiKey = (key: string) => {
+    const trimmedKey = key.trim();
+    if (trimmedKey) {
+      setApiKey(trimmedKey);
+      localStorage.setItem('gemini-api-key', trimmedKey);
+      setIsApiKeyModalOpen(false);
+      setGlobalError(null); 
+    }
+  };
+
+  const handleApiError = (error: unknown) => {
+      console.error("An API error occurred:", error);
+      const errorMessage = error instanceof Error ? error.message.toLowerCase() : '';
+      if (errorMessage.includes('api key not valid') || errorMessage.includes('permission denied') || errorMessage.includes('api key is invalid') || errorMessage.includes('requested entity was not found')) {
+          setGlobalError('Kunci API Anda tidak valid atau kedaluwarsa. Harap masukkan kunci yang valid dari Google AI Studio.');
+          localStorage.removeItem('gemini-api-key');
+          setApiKey(null);
+          setIsApiKeyModalOpen(true);
+          setIsGenerating(false);
+          setResults([]);
+          setGenerationStatus(null);
+          setViewMode('form');
+          return true; // API key error was handled
+      }
+      return false; // It was a different error
+  }
 
   const handleGenerate = async () => {
+    if (!apiKey) {
+      setGlobalError('Harap atur Kunci API Gemini Anda sebelum membuat.');
+      setIsApiKeyModalOpen(true);
+      return;
+    }
     if ((!isNoModelMode && !modelImages[0]) || !productImages[0] || !campaignTitle) {
       setGlobalError('Mohon isi kolom yang wajib diisi dan unggah foto yang diperlukan (Judul Kampanye, Foto Produk, dan Foto Model kecuali dalam mode Produk Saja).');
       return;
@@ -155,7 +200,7 @@ const App: React.FC = () => {
     }
 
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
+      const ai = new GoogleGenAI({ apiKey });
 
       let creativePrompt = `The overall mood is '${mood}', the location is '${subLocation}', and the camera aesthetic is '${cameraStyle}'. The product category is '${productCategory}'. Analyze ALL provided product images for design, color, and branding to ensure a faithful product representation.`;
       
@@ -220,7 +265,7 @@ Your primary and most critical task is to create a photorealistic, 100% accurate
         let previousScript: string | null = null;
         for (const [index, imageGenPrompt] of imagePrompts.entries()) {
             const result = await generateSingleResult(
-                ai, imageGenPrompt, index, modelImages, productImages, campaignTitle, productDescription, productReviews, previousScript, cameraAngle, isNoModelMode
+                ai, imageGenPrompt, index, modelImages, productImages, campaignTitle, productDescription, productReviews, previousScript, cameraAngle, isNoModelMode, apiKey
             );
             setResults(prev => prev.map(r => (r.id === result.id ? result : r)));
             if (result.videoPrompt) {
@@ -231,7 +276,7 @@ Your primary and most critical task is to create a photorealistic, 100% accurate
         }
       } else {
         const generationPromises = imagePrompts.map((prompt, index) => 
-          generateSingleResult(ai, prompt, index, modelImages, productImages, campaignTitle, productDescription, productReviews, null, cameraAngle, isNoModelMode).then(result => {
+          generateSingleResult(ai, prompt, index, modelImages, productImages, campaignTitle, productDescription, productReviews, null, cameraAngle, isNoModelMode, apiKey).then(result => {
               setResults(prev => prev.map(r => (r.id === result.id ? result : r)));
               return result;
           })
@@ -240,21 +285,20 @@ Your primary and most critical task is to create a photorealistic, 100% accurate
       }
 
     } catch (e) {
-      console.error(e);
-      const errorMessage = e instanceof Error ? e.message : 'An unknown error occurred.';
-      if (errorMessage.includes('API key not valid') || errorMessage.includes('Requested entity was not found')) {
-        setGlobalError('Kunci API Anda tampaknya tidak valid. Harap pastikan sudah dikonfigurasi dengan benar.');
-      } else {
+      const isApiKeyError = handleApiError(e);
+      if (!isApiKeyError) {
         setGlobalError('Terjadi kesalahan tak terduga selama pembuatan. Silakan periksa konsol.');
+        setResults([]);
       }
-      setResults([]);
     } finally {
       setIsGenerating(false);
       setGenerationStatus(null);
     }
   };
   
-  const generateSingleResult = async (ai: GoogleGenAI, imageGenPrompt: string, index: number, modelImgs: (ImageState | null)[], prodImgs: (ImageState | null)[], title: string, description: string, reviews: string, previousScript: string | null = null, angle: string, noModelMode: boolean): Promise<ResultItem> => {
+  const generateSingleResult = async (ai: GoogleGenAI, imageGenPrompt: string, index: number, modelImgs: (ImageState | null)[], prodImgs: (ImageState | null)[], title: string, description: string, reviews: string, previousScript: string | null = null, angle: string, noModelMode: boolean, apiKey: string): Promise<ResultItem> => {
+    const localAi = new GoogleGenAI({ apiKey });
+    
     try {
       const requestParts = [];
 
@@ -282,7 +326,8 @@ Your primary and most critical task is to create a photorealistic, 100% accurate
       
       requestParts.push({ text: finalImageGenPrompt });
 
-      const imageResponse = await ai.models.generateContent({
+      // Sesuai permintaan Anda, menggunakan "nano banana" yang sesuai dengan model 'gemini-2.5-flash-image'.
+      const imageResponse = await localAi.models.generateContent({
           model: 'gemini-2.5-flash-image',
           contents: { parts: requestParts },
           config: { responseModalities: [Modality.IMAGE] },
@@ -340,7 +385,7 @@ Product Category: ${productCategory}.`;
         jsonPrompt += `\n\nIMPORTANT CONTEXT: This video is part of a sequence. The script for the PREVIOUS video was: "${previousScript}". Please generate a new script that continues this story logically and creatively.`;
       }
 
-      const jsonResponse = await ai.models.generateContent({
+      const jsonResponse = await localAi.models.generateContent({
           model: 'gemini-2.5-flash',
           contents: {
               parts: [
@@ -368,10 +413,21 @@ Product Category: ${productCategory}.`;
 
   return (
     <div className="min-h-screen bg-brand-bg text-text-main font-sans">
+      <ApiKeyModal
+        isOpen={isApiKeyModalOpen}
+        onClose={() => { if (apiKey) setIsApiKeyModalOpen(false); }}
+        onSave={handleSaveApiKey}
+        currentKey={apiKey}
+      />
       <header className="py-4 px-8 border-b border-border-color flex justify-between items-center sticky top-0 bg-brand-bg/80 backdrop-blur-sm z-10">
         <div className="text-left">
             <h1 className="text-3xl font-bold text-white">Affiliate video base</h1>
             <p className="text-text-secondary mt-1">Buat brief kreatif dan konsep visual untuk video pemasaran afiliasi Anda.</p>
+        </div>
+        <div>
+            <button onClick={() => setIsApiKeyModalOpen(true)} className="bg-surface hover:bg-border-color text-text-secondary font-semibold py-2 px-4 rounded-lg text-sm transition-colors border border-border-color">
+                Atur Kunci API
+            </button>
         </div>
       </header>
 
@@ -565,6 +621,8 @@ Product Category: ${productCategory}.`;
           results={results}
           isGenerating={isGenerating}
           generationStatus={generationStatus}
+          apiKey={apiKey}
+          handleApiError={handleApiError}
         />
       </div>
     </div>

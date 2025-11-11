@@ -10,9 +10,11 @@ interface ResultCardProps {
   videoPrompt: BriefData | null;
   isLoading: boolean;
   error: string | null;
+  apiKey: string | null;
+  handleApiError: (error: unknown) => boolean;
 }
 
-const ResultCard: React.FC<ResultCardProps> = ({ imageUrl, videoPrompt, isLoading, error }) => {
+const ResultCard: React.FC<ResultCardProps> = ({ imageUrl, videoPrompt, isLoading, error, apiKey, handleApiError }) => {
   const [showJson, setShowJson] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -65,13 +67,16 @@ const ResultCard: React.FC<ResultCardProps> = ({ imageUrl, videoPrompt, isLoadin
   };
 
   const handleGenerateVideoPrompt = async () => {
-    if (!videoPrompt) return;
+    if (!videoPrompt || !apiKey) {
+        setPromptError('Kunci API tidak diatur. Harap atur di halaman utama.');
+        return;
+    }
 
     setIsGeneratingPrompt(true);
     setPromptError(null);
 
     try {
-        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
+        const ai = new GoogleGenAI({ apiKey });
 
         const voiceOverText = videoPrompt.audio_generation_parameters.voiceover.script_lines
             .map(line => line.text)
@@ -106,12 +111,9 @@ ${JSON.stringify(videoPrompt)}`;
         }
 
     } catch (e) {
-        console.error("Video prompt generation failed:", e);
-        const errorMessage = e instanceof Error ? e.message : "An unknown error occurred.";
-        if (errorMessage.includes('API key not valid') || errorMessage.includes('Requested entity was not found')) {
-            setPromptError('Your API key is invalid. Please check your configuration.');
-        } else {
-            setPromptError(`Failed to generate video prompt. ${errorMessage}`);
+        const isApiKeyError = handleApiError(e);
+        if (!isApiKeyError) {
+             setPromptError('Gagal membuat prompt video. Silakan coba lagi.');
         }
     } finally {
         setIsGeneratingPrompt(false);
