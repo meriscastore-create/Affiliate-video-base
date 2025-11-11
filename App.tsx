@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { GoogleGenAI, Modality } from "@google/genai";
 import { BriefData } from './types';
@@ -257,6 +258,54 @@ Product Category: ${productCategory}.`;
       }
   }
 
+  const generateImage = async (prompt: string, index: number) => {
+    // This function remains largely the same, but it's now called sequentially.
+    if (!apiKey) return;
+    const localAi = new GoogleGenAI({ apiKey });
+    try {
+        const requestParts = [];
+        if (!isNoModelMode) {
+            const modelParts = modelImages.filter((img): img is ImageState => img !== null).map(img => ({ inlineData: { mimeType: img.mimeType, data: img.data.split(',')[1] } }));
+            requestParts.push(...modelParts);
+        }
+        const productParts = productImages.filter((img): img is ImageState => img !== null).map(img => ({ inlineData: { mimeType: img.mimeType, data: img.data.split(',')[1] } }));
+        requestParts.push(...productParts);
+        
+        let finalImageGenPrompt = prompt;
+        let selectedAngle = cameraAngle;
+        if (cameraAngle === 'Random (Auto)' && !isStorytellingMode) {
+            selectedAngle = CAMERA_ANGLE_OPTIONS[Math.floor(Math.random() * (CAMERA_ANGLE_OPTIONS.length - 1)) + 1];
+        }
+        if (selectedAngle !== 'Random (Auto)') {
+            finalImageGenPrompt += ` The shot must be a ${selectedAngle}.`;
+        }
+        requestParts.push({ text: finalImageGenPrompt });
+
+        const imageResponse = await localAi.models.generateContent({
+            model: 'gemini-2.5-flash-image',
+            contents: { parts: requestParts },
+            config: { responseModalities: [Modality.IMAGE] },
+        });
+
+        const generatedImagePart = imageResponse.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
+        if (!generatedImagePart || !generatedImagePart.inlineData?.data) {
+            throw new Error("Data gambar tidak ditemukan dalam respons.");
+        }
+        const base64Image = generatedImagePart.inlineData.data;
+        const mimeType = generatedImagePart.inlineData.mimeType;
+        const imageUrl = `data:${mimeType};base64,${base64Image}`;
+        
+        setResults(prev => prev.map(r => r.id === index ? { ...r, imageUrl, mimeType, isLoading: false } : r));
+
+    } catch (error) {
+        console.error(`Error generating image for result ${index}:`, error);
+        const isApiKeyError = handleApiError(error);
+        if (!isApiKeyError) {
+            setResults(prev => prev.map(r => r.id === index ? { ...r, isLoading: false, error: 'Generasi Gagal.' } : r));
+        }
+    }
+  }
+
   const handleGenerate = async () => {
     if (!apiKey) {
       setGlobalError('Harap atur Kunci API Gemini Anda sebelum membuat.');
@@ -294,8 +343,6 @@ Product Category: ${productCategory}.`;
     }
 
     try {
-      const ai = new GoogleGenAI({ apiKey });
-
       let creativePrompt = `The overall mood is '${mood}', the location is '${subLocation}', and the camera aesthetic is '${cameraStyle}'. The product category is '${productCategory}'. Analyze ALL provided product images for design, color, and branding to ensure a faithful product representation.`;
       
       if (isApparel && !isNoModelMode) {
@@ -347,7 +394,6 @@ Your primary and most critical task is to create a photorealistic, 100% accurate
           ? withModelStorytellingPrompts
           : withModelSinglePrompts;
 
-
       const imagePrompts = imagePromptsSource.slice(0, numConcepts).map(scenePrompt => {
         if(isNoModelMode) {
           return `${scenePrompt} ${creativePrompt}`;
@@ -355,57 +401,18 @@ Your primary and most critical task is to create a photorealistic, 100% accurate
         return `${identityConstraint} ${scenePrompt} ${creativePrompt}`;
       });
 
-      const generateImage = async (prompt: string, index: number) => {
-        const localAi = new GoogleGenAI({ apiKey });
-        try {
-            const requestParts = [];
-            if (!isNoModelMode) {
-                const modelParts = modelImages.filter((img): img is ImageState => img !== null).map(img => ({ inlineData: { mimeType: img.mimeType, data: img.data.split(',')[1] } }));
-                requestParts.push(...modelParts);
-            }
-            const productParts = productImages.filter((img): img is ImageState => img !== null).map(img => ({ inlineData: { mimeType: img.mimeType, data: img.data.split(',')[1] } }));
-            requestParts.push(...productParts);
-            
-            let finalImageGenPrompt = prompt;
-            let selectedAngle = cameraAngle;
-            if (cameraAngle === 'Random (Auto)' && !isStorytellingMode) {
-                selectedAngle = CAMERA_ANGLE_OPTIONS[Math.floor(Math.random() * (CAMERA_ANGLE_OPTIONS.length - 1)) + 1];
-            }
-            if (selectedAngle !== 'Random (Auto)') {
-                finalImageGenPrompt += ` The shot must be a ${selectedAngle}.`;
-            }
-            requestParts.push({ text: finalImageGenPrompt });
-
-            const imageResponse = await localAi.models.generateContent({
-                model: 'gemini-2.5-flash-image',
-                contents: { parts: requestParts },
-                config: { responseModalities: [Modality.IMAGE] },
-            });
-
-            const generatedImagePart = imageResponse.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
-            if (!generatedImagePart || !generatedImagePart.inlineData?.data) {
-                throw new Error("Data gambar tidak ditemukan dalam respons.");
-            }
-            const base64Image = generatedImagePart.inlineData.data;
-            const mimeType = generatedImagePart.inlineData.mimeType;
-            const imageUrl = `data:${mimeType};base64,${base64Image}`;
-            
-            setResults(prev => prev.map(r => r.id === index ? { ...r, imageUrl, mimeType, isLoading: false } : r));
-
-        } catch (error) {
-            console.error(`Error generating image for result ${index}:`, error);
-            if (error instanceof Error && (error.message.includes('API key not valid') || error.message.includes('Requested entity was not found'))) {
-                handleApiError(error);
-            } else {
-                setResults(prev => prev.map(r => r.id === index ? { ...r, isLoading: false, error: 'Generasi Gagal.' } : r));
-            }
+      // Generate images sequentially to avoid rate limiting and timeouts.
+      for (let i = 0; i < imagePrompts.length; i++) {
+        // If the API key was found to be invalid in a previous step, stop trying.
+        if (!localStorage.getItem('gemini-api-key')) {
+          console.warn("Generation process halted due to API key removal.");
+          setResults(prev => prev.map(r => r.isLoading ? { ...r, isLoading: false, error: 'Dibatalkan (Kunci API tidak valid)' } : r));
+          break;
         }
+        
+        setGenerationStatus(`Membuat konsep gambar (${i + 1} dari ${numConcepts})...`);
+        await generateImage(imagePrompts[i], i);
       }
-
-      const generationPromises = imagePrompts.map((prompt, index) => 
-        generateImage(prompt, index)
-      );
-      await Promise.all(generationPromises);
 
     } catch (e) {
       const isApiKeyError = handleApiError(e);
