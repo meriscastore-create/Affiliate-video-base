@@ -380,7 +380,7 @@ Product Category: ${productCategory}.`;
     } catch (error) {
         console.error(`Error generating image for result ${index}:`, error);
         if (!handleApiError(error)) {
-            setResults(prev => prev.map(r => r.id === index ? { ...r, isLoading: false, error: 'Generasi Gagal.' } : r));
+            setResults(prev => prev.map(r => r.id === index ? { ...r, isLoading: false, error: 'Generasi Gagal. Ini mungkin karena filter keamanan AI. Coba ubah prompt kustom atau gunakan gambar yang berbeda.' } : r));
         }
         return null;
     }
@@ -443,40 +443,33 @@ Tempatkan orang yang identik ini ke dalam adegan baru berdasarkan prompt teks ya
     }
 
     try {
-      const creativePromptBase = `
----
-SCENE DIRECTIVE:
-The location for this image is NON-NEGOTIABLE. It MUST be: '${subLocation}'.
-The overall mood is '${mood}'.
-The camera aesthetic is '${cameraStyle}'.
----
-The product category is '${productCategory}'. Analyze ALL provided product images for design, color, and branding to ensure a faithful product representation.`;
+      const creativePromptBase = `Adegan harus berlokasi di: '${subLocation}'. Suasana keseluruhan adalah '${mood}'. Estetika kamera adalah '${cameraStyle}'. Kategori produk adalah '${productCategory}'. Analisis semua gambar produk yang disediakan untuk desain, warna, dan merek untuk memastikan representasi produk yang setia.`;
       
       let finalCreativePrompt = creativePromptBase;
       if (isApparel && !isNoModelMode) {
-        finalCreativePrompt += " The model MUST be wearing the product apparel naturally and stylishly.";
+        finalCreativePrompt += " Model harus mengenakan produk pakaian secara alami dan bergaya.";
       }
       if (customPrompt) {
-        finalCreativePrompt += ` Also, follow these creative directions: ${customPrompt}`;
+        finalCreativePrompt += ` Juga, ikuti arahan kreatif berikut: ${customPrompt}`;
       }
       setCreativePrompt(finalCreativePrompt);
       
       const withModelStorytellingPrompts = [
-          `Part 1 (The Discovery): A wide, establishing shot. The model, with a look of curiosity, first discovers or unboxes the product. They are positioned in a key part of the location that sets the scene. The lighting is bright and inviting.`,
-          `Part 2 (The First Touch): An extreme close-up from a high angle, focusing entirely on the model's hands interacting with the product's details. The background is completely out of focus. This shot highlights texture and quality.`,
-          `Part 3 (The "Aha!" Moment): A medium shot of the model's face as they use the product for the first time. Capture a genuine reaction of delight and satisfaction. The product is held near their face. The lighting should highlight their expression.`,
-          `Part 4 (In Action): A dynamic, full-body motion shot from a low angle. The model is actively using the product within the environment, showcasing its main benefit. Capture movement and energy.`,
-          `Part 5 (The Confident Showcase): A classic medium close-up. The model is now an expert, confidently holding the product towards the camera with a knowing smile. They are making direct eye contact. The background is clean and slightly blurred.`,
-          `Part 6 (The Integration): A final, relaxed lifestyle shot. A wide shot showing the product has become a natural part of the model's life in that location. The model is interacting with the environment, with the product subtly but clearly integrated.`
+          `Adegan yang cerah dan ramah di mana model pertama kali menemukan produk, menunjukkan rasa ingin tahu dan minat.`,
+          `Sebuah bidikan close-up detail dari tangan model yang berinteraksi dengan produk, menyoroti tekstur dan kualitasnya.`,
+          `Sebuah bidikan medium yang menangkap kegembiraan dan kepuasan tulus model saat mereka menggunakan produk untuk pertama kalinya.`,
+          `Sebuah bidikan seluruh tubuh yang dinamis menunjukkan model secara aktif menggunakan produk, menangkap rasa energi dan gerakan.`,
+          `Sebuah bidikan medium close-up yang percaya diri dari model yang memegang produk ke arah kamera sambil tersenyum, melakukan kontak mata langsung.`,
+          `Sebuah bidikan gaya hidup santai yang lebar menunjukkan produk terintegrasi secara alami ke dalam lingkungan model.`
         ];
 
       const withModelSinglePrompts = [
-          `A high-angle full body shot, looking down at the model who is sitting comfortably on the floor, thoughtfully arranging the product among other complementary items (like a book or a coffee cup). The lighting should be soft and natural, as if from a nearby window.`,
-          `A dynamic, medium close-up of the model laughing and looking directly at the camera. They should be in the middle of an action, perhaps leaning against a wall or sitting on the arm of a chair, holding the product naturally. Use a shallow depth of field to make the model pop.`,
-          `A full body shot from a low angle, making the model look confident and empowered. The model is standing, interacting with an element in the room (e.g., a bookshelf, a plant), with the product clearly visible. The background should show the scale of the location.`,
-          `An unconventional, artistic shot. A close-up focusing on the product being held by the model, but with their face visible in the reflection of a nearby surface (like a mirror, window, or screen). The mood should be slightly mysterious and intriguing.`,
-          `A candid, over-the-shoulder shot. The model is engaged in an activity within the location (e.g., reading, writing, looking out a window), with the product placed naturally within the scene. This should feel like a captured, private moment.`,
-          `A dynamic, slightly blurred motion shot. The model is walking across the room or turning around, caught mid-movement. The product should be held in a way that feels integrated into the action. The shot should convey energy and spontaneity.`
+          `Sebuah adegan yang lembut dan bercahaya alami dengan model duduk di lantai, dengan serius menata produk dengan barang-barang seperti buku atau cangkir kopi.`,
+          `Sebuah bidikan medium close-up dinamis dari model yang tertawa sambil memegang produk secara alami, melihat ke kamera.`,
+          `Sebuah bidikan seluruh tubuh yang percaya diri dari model yang berdiri dan berinteraksi dengan lingkungan, produk terlihat jelas.`,
+          `Sebuah bidikan close-up artistik dari produk, dengan wajah model terpantul di permukaan terdekat seperti cermin atau jendela.`,
+          `Sebuah bidikan candid yang menunjukkan model sedang melakukan aktivitas seperti membaca atau menulis, dengan produk ditempatkan secara alami dalam adegan.`,
+          `Sebuah bidikan gerak dinamis yang menangkap model di tengah gerakan, menyampaikan energi dan spontanitas.`
         ];
 
       const noModelPrompts = [
