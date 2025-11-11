@@ -344,10 +344,10 @@ Product Category: ${productCategory}.`;
         }
 
         // --- PRODUCT IMAGES ---
-        const productParts = productImages
-            .filter((img): img is ImageState => img !== null)
-            .map(img => ({ inlineData: { mimeType: img.mimeType, data: img.data.split(',')[1] } }));
-        requestParts.push(...productParts);
+        // ONLY send the primary product image to reduce payload size and complexity.
+        if (productImages[0]) {
+            requestParts.push({ inlineData: { mimeType: productImages[0].mimeType, data: productImages[0].data.split(',')[1] } });
+        }
         
         // --- TEXT PROMPT ---
         let finalImageGenPrompt = prompt;
@@ -356,7 +356,7 @@ Product Category: ${productCategory}.`;
             selectedAngle = CAMERA_ANGLE_OPTIONS[Math.floor(Math.random() * (CAMERA_ANGLE_OPTIONS.length - 1)) + 1];
         }
         if (selectedAngle !== 'Random (Auto)') {
-            finalImageGenPrompt += ` The shot must be a ${selectedAngle}.`;
+            finalImageGenPrompt += ` Sudut kamera: ${selectedAngle}.`;
         }
         requestParts.push({ text: finalImageGenPrompt });
 
@@ -368,7 +368,7 @@ Product Category: ${productCategory}.`;
 
         const generatedImagePart = imageResponse.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
         if (!generatedImagePart || !generatedImagePart.inlineData?.data) {
-            throw new Error("Data gambar tidak ditemukan dalam respons.");
+            throw new Error("Data gambar tidak ditemukan dalam respons. Ini mungkin karena filter keamanan.");
         }
         const base64Image = generatedImagePart.inlineData.data;
         const mimeType = generatedImagePart.inlineData.mimeType;
@@ -387,21 +387,19 @@ Product Category: ${productCategory}.`;
   }
 
   const getIdentityProtocolPrompt = (hasAnchorImage: boolean): string => {
-    let prompt = `**Tujuan Utama: Konsistensi Identitas.**
-Orang dalam gambar yang dihasilkan HARUS sama persis dengan orang di foto referensi.
-
-- **Referensi Wajah:** Gunakan gambar close-up yang dipotong sebagai sumber mutlak untuk semua fitur wajah. Wajahnya harus identik.
-- **Referensi Tubuh & Rambut:** Gunakan foto seluruh tubuh untuk tipe tubuh, postur, dan gaya rambut.
+    let prompt = `**PERINTAH KETAT:** Ciptakan ulang orang dari foto referensi ke dalam adegan baru.
+- **WAJAH:** Harus sama persis dengan gambar wajah yang dipotong. Ini adalah prioritas utama.
+- **TUBUH & GAYA:** Harus cocok dengan tipe tubuh dan gaya rambut dari gambar seluruh tubuh.
+- **JANGAN SALIN:** Jangan meniru pose, pencahayaan, atau latar belakang dari foto referensi. Buat adegan yang sepenuhnya baru.
 `;
 
     if (hasAnchorImage) {
-        prompt += `- **Pemeriksaan Konsistensi:** Orang yang dihasilkan juga harus identik dengan orang di gambar pertama yang dihasilkan (gambar jangkar). Ini adalah ingatan Anda tentang kecocokan yang berhasil.
+        prompt += `- **KONSISTENSI:** Orang yang dihasilkan juga harus cocok dengan orang di gambar 'jangkar' (gambar pertama yang berhasil dibuat). Ini adalah referensi visual Anda.
 `;
     }
 
     prompt += `
-**Tujuan Sekunder: Penciptaan Adegan.**
-Tempatkan orang yang identik ini ke dalam adegan baru berdasarkan prompt teks yang mengikuti. JANGAN menyalin latar belakang, pencahayaan, atau pose dari foto referensi. Buat konsep visual yang sepenuhnya baru dan unik.`;
+Tempatkan orang yang konsisten ini dalam adegan berikut:`;
 
     return prompt;
 };
@@ -432,7 +430,7 @@ Tempatkan orang yang identik ini ke dalam adegan baru berdasarkan prompt teks ya
     const statusUpdates = [
         'Menganalisis foto model...',
         'Mengekstrak detail wajah & postur...',
-        'Menganalisis semua foto produk...',
+        'Menganalisis foto produk utama...',
         'Menyusun prompt kreatif...',
         'Menghubungi AI untuk membuat visual...',
     ];
@@ -443,42 +441,42 @@ Tempatkan orang yang identik ini ke dalam adegan baru berdasarkan prompt teks ya
     }
 
     try {
-      const creativePromptBase = `Adegan harus berlokasi di: '${subLocation}'. Suasana keseluruhan adalah '${mood}'. Estetika kamera adalah '${cameraStyle}'. Kategori produk adalah '${productCategory}'. Analisis semua gambar produk yang disediakan untuk desain, warna, dan merek untuk memastikan representasi produk yang setia.`;
+      const creativePromptBase = `Lokasi: '${subLocation}'. Suasana: '${mood}'. Gaya Kamera: '${cameraStyle}'. Kategori Produk: '${productCategory}'. Analisis gambar produk yang disediakan untuk desain dan warna yang akurat.`;
       
       let finalCreativePrompt = creativePromptBase;
       if (isApparel && !isNoModelMode) {
-        finalCreativePrompt += " Model harus mengenakan produk pakaian secara alami dan bergaya.";
+        finalCreativePrompt += " Model harus mengenakan produk pakaian.";
       }
       if (customPrompt) {
-        finalCreativePrompt += ` Juga, ikuti arahan kreatif berikut: ${customPrompt}`;
+        finalCreativePrompt += ` Arahan tambahan: ${customPrompt}`;
       }
       setCreativePrompt(finalCreativePrompt);
       
       const withModelStorytellingPrompts = [
-          `Adegan yang cerah dan ramah di mana model pertama kali menemukan produk, menunjukkan rasa ingin tahu dan minat.`,
-          `Sebuah bidikan close-up detail dari tangan model yang berinteraksi dengan produk, menyoroti tekstur dan kualitasnya.`,
-          `Sebuah bidikan medium yang menangkap kegembiraan dan kepuasan tulus model saat mereka menggunakan produk untuk pertama kalinya.`,
-          `Sebuah bidikan seluruh tubuh yang dinamis menunjukkan model secara aktif menggunakan produk, menangkap rasa energi dan gerakan.`,
-          `Sebuah bidikan medium close-up yang percaya diri dari model yang memegang produk ke arah kamera sambil tersenyum, melakukan kontak mata langsung.`,
-          `Sebuah bidikan gaya hidup santai yang lebar menunjukkan produk terintegrasi secara alami ke dalam lingkungan model.`
+          `Model pertama kali menemukan produk. Ekspresi: Penasaran, tertarik. Pencahayaan: Cerah, ramah.`,
+          `Close-up detail tangan model yang berinteraksi dengan produk. Fokus pada tekstur dan kualitas produk.`,
+          `Medium shot model menunjukkan kegembiraan tulus saat menggunakan produk.`,
+          `Full body shot dinamis, model aktif menggunakan produk, menunjukkan energi dan gerakan.`,
+          `Medium close-up percaya diri, model memegang produk ke arah kamera, tersenyum, kontak mata langsung.`,
+          `Wide shot gaya hidup, produk terintegrasi secara alami di lingkungan model.`
         ];
 
       const withModelSinglePrompts = [
-          `Sebuah adegan yang lembut dan bercahaya alami dengan model duduk di lantai, dengan serius menata produk dengan barang-barang seperti buku atau cangkir kopi.`,
-          `Sebuah bidikan medium close-up dinamis dari model yang tertawa sambil memegang produk secara alami, melihat ke kamera.`,
-          `Sebuah bidikan seluruh tubuh yang percaya diri dari model yang berdiri dan berinteraksi dengan lingkungan, produk terlihat jelas.`,
-          `Sebuah bidikan close-up artistik dari produk, dengan wajah model terpantul di permukaan terdekat seperti cermin atau jendela.`,
-          `Sebuah bidikan candid yang menunjukkan model sedang melakukan aktivitas seperti membaca atau menulis, dengan produk ditempatkan secara alami dalam adegan.`,
-          `Sebuah bidikan gerak dinamis yang menangkap model di tengah gerakan, menyampaikan energi dan spontanitas.`
+          `Model duduk di lantai, menata produk dengan properti seperti buku atau kopi. Pencahayaan: Lembut, alami.`,
+          `Medium close-up dinamis, model tertawa sambil memegang produk, melihat ke kamera.`,
+          `Full body shot percaya diri, model berdiri dan berinteraksi dengan lingkungan, produk terlihat jelas.`,
+          `Artistik close-up produk, dengan pantulan wajah model di permukaan terdekat (cermin, jendela).`,
+          `Candid shot, model sedang membaca atau menulis, produk ditempatkan secara alami dalam adegan.`,
+          `Shot gerakan dinamis, menangkap model di tengah aksi, menunjukkan energi.`
         ];
 
       const noModelPrompts = [
-        `A stunning hero shot of the product against a clean, minimalist background that complements its color palette. Use soft, studio lighting.`,
-        `A dynamic, in-context lifestyle shot showing the product on a wooden coffee table next to a steaming mug and an open book. Golden hour lighting.`,
-        `An artistic flat lay composition featuring the product, surrounded by elements that evoke its use case (e.g., tech gadgets, makeup brushes, sports gear).`,
-        `An extreme close-up (macro) shot focusing on the product's most intricate design detail or texture, highlighting its quality craftsmanship.`,
-        `The product unboxed, with its packaging elegantly arranged around it. A sense of premium quality and anticipation.`,
-        `A creative shot where the product is interacting with nature, like being placed on a mossy rock or next to a delicate flower, creating a beautiful contrast.`
+        `Product hero shot. Latar belakang: bersih, minimalis. Pencahayaan: studio, lembut.`,
+        `Produk dalam konteks gaya hidup. Di atas meja kopi kayu, di samping cangkir dan buku. Pencahayaan: Golden hour.`,
+        `Komposisi flat lay artistik. Produk dikelilingi oleh elemen yang relevan (gadget, kuas makeup, dll).`,
+        `Extreme close-up (makro) pada detail desain atau tekstur produk. Menyoroti kualitas.`,
+        `Produk baru dibuka, dengan kemasan yang ditata elegan di sekitarnya. Kesan: premium.`,
+        `Shot kreatif, produk berinteraksi dengan alam (di atas batu berlumut, di samping bunga).`
       ];
 
       const imagePromptsSource = isNoModelMode
