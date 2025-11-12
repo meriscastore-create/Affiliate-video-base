@@ -1,12 +1,10 @@
-import React, { useState, useEffect } from 'react';
-import { GoogleGenAI, Modality } from "@google/genai";
+import React, { useState, useEffect, useRef } from 'react';
+import { GoogleGenAI, Modality, Type } from "@google/genai";
 import { BriefData } from './types';
-import { briefDataSchema } from './schema';
+import { briefDataSchema, scenePromptsSchema } from './schema';
 import ImageUploader from './components/ImageUploader';
 import GenerationSidebar from './components/GenerationSidebar';
 import FaceCropModal from './components/FaceCropModal';
-import ApiKeyModal from './components/ApiKeyModal';
-import { KeyIcon } from './components/Icons';
 import { 
   CAMERA_OPTIONS, 
   MOOD_OPTIONS, 
@@ -17,6 +15,7 @@ import {
   LOCATION_TYPE_OPTIONS,
   VOICEOVER_STYLE_OPTIONS
 } from './constants';
+
 
 declare global {
   interface Window {
@@ -38,9 +37,6 @@ export type ImageState = { data: string; mimeType: string };
 const delay = (ms: number) => new Promise(res => setTimeout(res, ms));
 
 const App: React.FC = () => {
-  const [apiKey, setApiKey] = useState<string | null>(null);
-  const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState(false);
-
   const [modelImages, setModelImages] = useState<(ImageState | null)[]>(Array(5).fill(null));
   const [productImages, setProductImages] = useState<(ImageState | null)[]>(Array(6).fill(null));
   const [results, setResults] = useState<ResultItem[]>([]);
@@ -57,11 +53,14 @@ const App: React.FC = () => {
   const [productCategory, setProductCategory] = useState(PRODUCT_CATEGORIES[0]);
   const [voiceoverStyle, setVoiceoverStyle] = useState(VOICEOVER_STYLE_OPTIONS[0]);
   const [isStorytellingMode, setIsStorytellingMode] = useState(false);
-  const [customPrompt, setCustomPrompt] = useState('buat model tersebut sebagai model utama dan jangan ganti dengan model lainya, termasuk wajah dan posture sebagai penekanan');
+  const [customPrompt, setCustomPrompt] = useState('buat model tersebut sebagai model utama dan jangan ganti dengan model lainya, termasuk wajah dan posture sebagai penekanan\nfokus pengaplikasian ke product\nframe le bih fokus ke model dan product\ntanpa text, tanpa watermark, tanpa sticker');
   const [isApparel, setIsApparel] = useState(false);
   const [cameraAngle, setCameraAngle] = useState(CAMERA_ANGLE_OPTIONS[0]);
   const [numConcepts, setNumConcepts] = useState(6);
   const [isNoModelMode, setIsNoModelMode] = useState(false);
+  const [faceReferenceStrength, setFaceReferenceStrength] = useState(100);
+  const [productReferenceStrength, setProductReferenceStrength] = useState(100);
+
 
   const [activeUploader, setActiveUploader] = useState<string>('model-0');
   const [isDragging, setIsDragging] = useState(false);
@@ -79,23 +78,9 @@ const App: React.FC = () => {
 
   // State for regeneration
   const [imagePrompts, setImagePrompts] = useState<string[]>([]);
-  const [creativePrompt, setCreativePrompt] = useState('');
-
-  useEffect(() => {
-    const storedApiKey = localStorage.getItem('gemini-api-key');
-    if (storedApiKey) {
-      setApiKey(storedApiKey);
-    } else {
-      setIsApiKeyModalOpen(true);
-    }
-  }, []);
-
-  const handleSaveApiKey = (newKey: string) => {
-    setApiKey(newKey);
-    localStorage.setItem('gemini-api-key', newKey);
-    setIsApiKeyModalOpen(false);
-    setGlobalError(null); 
-  };
+  
+  // Ref for stopping generation
+  const isStoppingRef = useRef(false);
 
   useEffect(() => {
     const loadFaceApiModels = async () => {
@@ -209,13 +194,11 @@ const App: React.FC = () => {
 
   const handleApiError = (error: unknown) => {
       console.error("An API error occurred:", error);
-      const errorMessage = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
-      
-      if (errorMessage.includes('api key not valid') || errorMessage.includes('permission denied') || errorMessage.includes('api key is invalid') || errorMessage.includes('api_key_not_valid') || errorMessage.includes('requested entity was not found')) {
-          setGlobalError('Kunci API Anda tidak valid. Silakan periksa dan masukkan kunci yang benar dari Google AI Studio.');
-          setIsApiKeyModalOpen(true); // Re-open the modal
+      const errorMessage = error instanceof Error ? error.message.toLowerCase() : '';
+      if (errorMessage.includes('api key not valid') || errorMessage.includes('permission denied') || errorMessage.includes('api key is invalid') || errorMessage.includes('requested entity was not found')) {
+          setGlobalError('Terjadi masalah dengan Kunci API. Pastikan kunci API telah dikonfigurasi dengan benar di lingkungan.');
           setIsGenerating(false);
-          setResults(prev => prev.map(r => r.isLoading ? { ...r, isLoading: false, error: 'Kunci API tidak valid' } : r));
+          setResults(prev => prev.map(r => r.isLoading ? { ...r, isLoading: false, error: 'Kesalahan Konfigurasi API' } : r));
           setGenerationStatus(null);
           return true; // API key error was handled
       }
@@ -223,18 +206,13 @@ const App: React.FC = () => {
   }
   
   const handleGenerateBrief = async (id: number) => {
-      if (!apiKey) {
-          setIsApiKeyModalOpen(true);
-          return;
-      }
-
       const resultItem = results.find(r => r.id === id);
       if (!resultItem || !resultItem.imageUrl || !resultItem.mimeType) return;
       
       setResults(prev => prev.map(r => r.id === id ? { ...r, isLoading: true, error: null } : r));
       
       try {
-        const ai = new GoogleGenAI({ apiKey });
+        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
         let previousScript: string | null = null;
         if (isStorytellingMode && !isNoModelMode) {
@@ -273,8 +251,8 @@ Product Category: ${productCategory}.`;
 - Include creative and fitting suggestions for background music based on the overall mood.
 - Ensure the description and script lines are concise and engaging.
 - **CRITICAL**: The voiceover script MUST follow this 9-part structure:
-    1. HOOK: A scroll-stopping opening line.
-    2. PROBLEM: The audience's pain point.
+    1. HOOK: A scroll-stopping opening line that acts as a **problem-solving hook**. It should present a relatable problem that the product solves. (e.g., "Capek kan kalau...", "Pernah gak sih kamu...").
+    2. PROBLEM: Briefly elaborate on the pain point introduced in the hook.
     3. PRODUCT INTRO: Introduce the product.
     4. BENEFIT 1: Main advantage.
     5. BENEFIT 2: Secondary advantage.
@@ -315,14 +293,66 @@ Product Category: ${productCategory}.`;
         }
       }
   }
+  
+  const generateScenePrompts = async (count: number): Promise<string[]> => {
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    let creativeDirectorPrompt: string;
 
-  const generateImage = async (prompt: string, index: number, anchorImage: ImageState | null) => {
-    if (!apiKey) {
-      setIsApiKeyModalOpen(true);
-      return null;
+    if (isNoModelMode) {
+        creativeDirectorPrompt = `You are a world-class Product Photographer's Creative Director.
+Your task is to generate ${count} unique, visually stunning concepts for a product-only photoshoot.
+The core theme is to make the product look iconic and desirable.
+Think about unique environments, lighting, and compositions. DO NOT be generic.
+
+**Product Information:**
+- Category: ${productCategory}
+- Description: ${productDescription || 'No description provided.'}
+- Location Context: ${subLocation}
+- Overall Mood: ${mood}
+
+Each concept must be a single, descriptive paragraph.
+Your final output MUST be a JSON object that strictly follows the provided schema.`;
+    } else {
+        creativeDirectorPrompt = `You are an expert Creative Director specializing in authentic, engaging Gen Z influencer content for platforms like TikTok and Instagram Reels.
+Your task is to generate ${count} unique, detailed, and visually compelling scene concepts.
+
+**THEME & PERSONA:**
+The central theme is **ENTHUSIASTIC & HONEST REVIEW**. The influencer genuinely loves this product and is enthusiastically sharing their excitement with their followers. This is NOT a polished ad. It should feel like a real, candid moment from a content creator's life, showing the product within a familiar, relatable routine.
+
+**Creative Constraints & Inspiration:**
+- **Product:** A ${productCategory} described as: "${productDescription || 'No description provided.'}"
+- **Location:** The scene MUST take place in a setting like: **${subLocation}**.
+- **Overall Mood:** The vibe should be **${mood}**.
+
+**Instructions:**
+- Generate ${count} completely different scene ideas.
+- Each concept should be a single, descriptive paragraph focusing on the action, environment, and the influencer's enthusiastic expression.
+- Emphasize natural interaction with the product.
+- DO NOT be generic. DO NOT create boring studio shots. DO NOT repeat ideas.
+- Your final output MUST be a JSON object that strictly follows the provided schema.`;
     }
 
-    const ai = new GoogleGenAI({ apiKey });
+    try {
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: creativeDirectorPrompt,
+            config: {
+                responseMimeType: "application/json",
+                responseSchema: scenePromptsSchema,
+            }
+        });
+        const parsed = JSON.parse(response.text);
+        return parsed.prompts.map((p: { scene_prompt: string }) => p.scene_prompt);
+    } catch (error) {
+        console.error("Failed to generate scene prompts:", error);
+        handleApiError(error);
+        throw new Error("Could not generate creative scenes from AI Director.");
+    }
+  };
+
+
+  const generateImage = async (prompt: string, index: number, anchorImage: ImageState | null) => {
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     try {
         const requestParts = [];
 
@@ -344,21 +374,13 @@ Product Category: ${productCategory}.`;
         }
 
         // --- PRODUCT IMAGES ---
-        // ONLY send the primary product image to reduce payload size and complexity.
-        if (productImages[0]) {
-            requestParts.push({ inlineData: { mimeType: productImages[0].mimeType, data: productImages[0].data.split(',')[1] } });
+        const mainProductImage = productImages.find((img): img is ImageState => img !== null);
+        if (mainProductImage) {
+            requestParts.push({ inlineData: { mimeType: mainProductImage.mimeType, data: mainProductImage.data.split(',')[1] } });
         }
         
         // --- TEXT PROMPT ---
-        let finalImageGenPrompt = prompt;
-        let selectedAngle = cameraAngle;
-        if (cameraAngle === 'Random (Auto)' && !isStorytellingMode) {
-            selectedAngle = CAMERA_ANGLE_OPTIONS[Math.floor(Math.random() * (CAMERA_ANGLE_OPTIONS.length - 1)) + 1];
-        }
-        if (selectedAngle !== 'Random (Auto)') {
-            finalImageGenPrompt += ` Sudut kamera: ${selectedAngle}.`;
-        }
-        requestParts.push({ text: finalImageGenPrompt });
+        requestParts.push({ text: prompt });
 
         const imageResponse = await ai.models.generateContent({
             model: 'gemini-2.5-flash-image',
@@ -368,7 +390,7 @@ Product Category: ${productCategory}.`;
 
         const generatedImagePart = imageResponse.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
         if (!generatedImagePart || !generatedImagePart.inlineData?.data) {
-            throw new Error("Data gambar tidak ditemukan dalam respons. Ini mungkin karena filter keamanan.");
+            throw new Error("Data gambar tidak ditemukan dalam respons.");
         }
         const base64Image = generatedImagePart.inlineData.data;
         const mimeType = generatedImagePart.inlineData.mimeType;
@@ -380,40 +402,90 @@ Product Category: ${productCategory}.`;
     } catch (error) {
         console.error(`Error generating image for result ${index}:`, error);
         if (!handleApiError(error)) {
-            setResults(prev => prev.map(r => r.id === index ? { ...r, isLoading: false, error: 'Generasi Gagal. Ini mungkin karena filter keamanan AI. Coba ubah prompt kustom atau gunakan gambar yang berbeda.' } : r));
+             setResults(prev => prev.map(r => r.id === index ? { ...r, isLoading: false, error: 'Generasi Gagal. Ini mungkin karena filter keamanan AI. Coba ubah prompt kustom atau gunakan gambar yang berbeda.' } : r));
         }
         return null;
     }
   }
 
-  const getIdentityProtocolPrompt = (hasAnchorImage: boolean): string => {
-    let prompt = `**PERINTAH KETAT:** Ciptakan ulang orang dari foto referensi ke dalam adegan baru.
-- **WAJAH:** Harus sama persis dengan gambar wajah yang dipotong. Ini adalah prioritas utama.
-- **TUBUH & GAYA:** Harus cocok dengan tipe tubuh dan gaya rambut dari gambar seluruh tubuh.
-- **JANGAN SALIN:** Jangan meniru pose, pencahayaan, atau latar belakang dari foto referensi. Buat adegan yang sepenuhnya baru.
+  const getIdentityProtocolPrompt = (hasAnchorImage: boolean, strength: number): string => {
+    let faceMatchInstruction: string;
+    let primaryObjective: string;
+
+    if (strength >= 95) {
+        primaryObjective = `Your most critical task is to perfectly replicate the identity of the person in the reference images. Failure to match the face, especially its unique contour and structure, is a complete failure of the entire task.`;
+        faceMatchInstruction = `The generated person's facial features—eyes, nose, mouth, jawline, cheekbones, and especially the overall **facial contour and structure**—MUST be an EXACT, non-negotiable match to the cropped face provided in IMAGE 1. This is the master face template. Study it meticulously.`;
+    } else if (strength >= 75) {
+        primaryObjective = `Your primary task is to create a person who is immediately and unmistakably recognizable as the model in the reference images. A very high degree of likeness is required.`;
+        faceMatchInstruction = `The generated person's facial features MUST be a VERY CLOSE MATCH to the cropped face in IMAGE 1. Prioritize capturing the key **facial contour and structure** (jawline, cheekbones). Minor variations in expression are acceptable, but the core identity must be immediately recognizable.`;
+    } else { // 50-74
+        primaryObjective = `Your primary task is to create a person who is strongly inspired by the model in the reference images. A clear resemblance is required, but some artistic interpretation is allowed.`;
+        faceMatchInstruction = `The generated person's face MUST be STRONGLY INSPIRED by the cropped face in IMAGE 1. A clear resemblance is required, especially in the **facial contour and structure**, but you have artistic freedom for the expression and subtle details. The person should look like a plausible version of the model, not an exact copy.`;
+    }
+    
+    let prompt = `
+== CORE IDENTITY PROTOCOL (NON-NEGOTIABLE) ==
+1.  **PRIMARY OBJECTIVE:** ${primaryObjective}
+2.  **FACE REFERENCE (IMAGE 1):** ${faceMatchInstruction}
+3.  **BODY & STYLE REFERENCE (IMAGE 2):** The person's body type, physique, hair style, hair color, and skin tone MUST match the main model photo in IMAGE 2.
 `;
 
     if (hasAnchorImage) {
-        prompt += `- **KONSISTENSI:** Orang yang dihasilkan juga harus cocok dengan orang di gambar 'jangkar' (gambar pertama yang berhasil dibuat). Ini adalah referensi visual Anda.
-`;
+        prompt += `4. **CONSISTENCY CHECK (IMAGE 3):** The previous image (IMAGE 3) is provided as a reference. Ensure the identity remains perfectly consistent with this last successful generation.\n`;
     }
 
     prompt += `
-Tempatkan orang yang konsisten ini dalam adegan berikut:`;
+== CREATIVE BRIEF (YOUR MAIN TASK) ==
+Your creative assignment is to place the person defined above into a completely NEW, unique, and compelling scene as described in the 'SCENE DIRECTIVE' that follows this protocol. The reference images are ONLY for identity, not for creative inspiration.
 
+== FORBIDDEN ACTIONS (STRICTLY ENFORCED) ==
+- **DO NOT** copy the pose from any reference image.
+- **DO NOT** copy the background, environment, or location from any reference image.
+- **DO NOT** copy the lighting style from any reference image.
+- **DO NOT** create a simple portrait or studio shot unless the SCENE DIRECTIVE explicitly asks for it. Be creative.
+---
+`;
     return prompt;
 };
 
-  const handleGenerate = async () => {
-    if (!apiKey) {
-      setIsApiKeyModalOpen(true);
-      setGlobalError('Silakan masukkan Kunci API Gemini Anda untuk memulai.');
-      return;
+const getProductProtocolPrompt = (strength: number): string => {
+    const mainProductImage = productImages.find((img): img is ImageState => img !== null);
+    if (!mainProductImage) return '';
+
+    let productMatchInstruction: string;
+    let primaryObjective: string;
+
+    if (strength >= 95) {
+        primaryObjective = `Replikasi produk yang ditampilkan dalam gambar referensi dengan TEPAT dan akurat. Kegagalan dalam mencocokkan model, warna, dan merek spesifik produk adalah kegagalan besar.`;
+        productMatchInstruction = `Produk yang ditampilkan dalam adegan HARUS merupakan salinan yang TEPAT dan tidak bisa ditawar dari gambar produk utama yang disediakan. Ini termasuk model, warna, merek, tekstur, dan detail uniknya. Pelajari gambar produk dengan cermat.`;
+    } else if (strength >= 75) {
+        primaryObjective = `Buat produk yang sangat mirip dan dapat dikenali sebagai produk dalam gambar referensi. Tingkat kemiripan yang sangat tinggi diperlukan.`;
+        productMatchInstruction = `Produk yang ditampilkan HARUS SANGAT MIRIP dengan gambar produk utama. Harus jenis produk, warna, dan merek yang sama. Variasi kecil dalam sudut atau pantulan dapat diterima, tetapi identitas inti produk harus identik.`;
+    } else { // 50-74
+        primaryObjective = `Buat produk yang sangat terinspirasi oleh gambar referensi. Diperlukan kemiripan yang jelas, tetapi beberapa interpretasi artistik diizinkan.`;
+        productMatchInstruction = `Produk yang ditampilkan HARUS SANGAT TERINSPIRASI oleh gambar produk utama. Harus kategori dan gaya umum yang sama (misalnya, jam tangan pintar hitam yang tampak serupa), tetapi tidak harus model atau merek yang sama persis. Anda memiliki kebebasan artistik untuk detail halusnya.`;
     }
+    
+    return `
+== PROTOKOL IDENTITAS PRODUK (TIDAK BISA DITAWAR) ==
+1.  **TUJUAN UTAMA:** ${primaryObjective}
+2.  **REFERENSI PRODUK:** ${productMatchInstruction}
+---
+`;
+};
+
+
+  const handleStopGeneration = () => {
+    isStoppingRef.current = true;
+    setGenerationStatus('Menghentikan...');
+  };
+
+  const handleGenerate = async () => {
     if ((!isNoModelMode && !modelImages[0]) || !productImages[0] || !campaignTitle) {
       setGlobalError('Mohon isi kolom yang wajib diisi dan unggah foto yang diperlukan (Judul Kampanye, Foto Produk, dan Foto Model kecuali dalam mode Produk Saja).');
       return;
     }
+    isStoppingRef.current = false;
     setGlobalError(null);
     setIsGenerating(true);
     const initialResults: ResultItem[] = Array.from({ length: numConcepts }, (_, i) => ({
@@ -430,92 +502,70 @@ Tempatkan orang yang konsisten ini dalam adegan berikut:`;
     const statusUpdates = [
         'Menganalisis foto model...',
         'Mengekstrak detail wajah & postur...',
-        'Menganalisis foto produk utama...',
-        'Menyusun prompt kreatif...',
+        'Menganalisis semua foto produk...',
+        'Menghubungi Sutradara AI untuk ide...',
+        'Menyusun prompt visual...',
         'Menghubungi AI untuk membuat visual...',
     ];
     
     for (const status of statusUpdates) {
+        if (isStoppingRef.current) break;
         setGenerationStatus(status);
         await delay(900);
     }
 
     try {
-      const creativePromptBase = `Lokasi: '${subLocation}'. Suasana: '${mood}'. Gaya Kamera: '${cameraStyle}'. Kategori Produk: '${productCategory}'. Analisis gambar produk yang disediakan untuk desain dan warna yang akurat.`;
-      
-      let finalCreativePrompt = creativePromptBase;
-      if (isApparel && !isNoModelMode) {
-        finalCreativePrompt += " Model harus mengenakan produk pakaian.";
-      }
-      if (customPrompt) {
-        finalCreativePrompt += ` Arahan tambahan: ${customPrompt}`;
-      }
-      setCreativePrompt(finalCreativePrompt);
-      
-      const withModelStorytellingPrompts = [
-          `Model pertama kali menemukan produk. Ekspresi: Penasaran, tertarik. Pencahayaan: Cerah, ramah.`,
-          `Close-up detail tangan model yang berinteraksi dengan produk. Fokus pada tekstur dan kualitas produk.`,
-          `Medium shot model menunjukkan kegembiraan tulus saat menggunakan produk.`,
-          `Full body shot dinamis, model aktif menggunakan produk, menunjukkan energi dan gerakan.`,
-          `Medium close-up percaya diri, model memegang produk ke arah kamera, tersenyum, kontak mata langsung.`,
-          `Wide shot gaya hidup, produk terintegrasi secara alami di lingkungan model.`
-        ];
+      if (!isStoppingRef.current) {
+        setGenerationStatus('Sutradara AI sedang menyusun konsep...');
+        const prompts = await generateScenePrompts(numConcepts);
+        setImagePrompts(prompts);
 
-      const withModelSinglePrompts = [
-          `Model duduk di lantai, menata produk dengan properti seperti buku atau kopi. Pencahayaan: Lembut, alami.`,
-          `Medium close-up dinamis, model tertawa sambil memegang produk, melihat ke kamera.`,
-          `Full body shot percaya diri, model berdiri dan berinteraksi dengan lingkungan, produk terlihat jelas.`,
-          `Artistik close-up produk, dengan pantulan wajah model di permukaan terdekat (cermin, jendela).`,
-          `Candid shot, model sedang membaca atau menulis, produk ditempatkan secara alami dalam adegan.`,
-          `Shot gerakan dinamis, menangkap model di tengah aksi, menunjukkan energi.`
-        ];
+        let anchorImage: ImageState | null = null;
 
-      const noModelPrompts = [
-        `Product hero shot. Latar belakang: bersih, minimalis. Pencahayaan: studio, lembut.`,
-        `Produk dalam konteks gaya hidup. Di atas meja kopi kayu, di samping cangkir dan buku. Pencahayaan: Golden hour.`,
-        `Komposisi flat lay artistik. Produk dikelilingi oleh elemen yang relevan (gadget, kuas makeup, dll).`,
-        `Extreme close-up (makro) pada detail desain atau tekstur produk. Menyoroti kualitas.`,
-        `Produk baru dibuka, dengan kemasan yang ditata elegan di sekitarnya. Kesan: premium.`,
-        `Shot kreatif, produk berinteraksi dengan alam (di atas batu berlumut, di samping bunga).`
-      ];
+        for (let i = 0; i < prompts.length; i++) {
+          if (isStoppingRef.current) {
+              setGenerationStatus('Generasi dihentikan oleh pengguna.');
+              setResults(prev => prev.map(r => r.isLoading ? { ...r, isLoading: false, error: 'Dibatalkan' } : r));
+              break;
+          }
 
-      const imagePromptsSource = isNoModelMode
-          ? noModelPrompts
-          : isStorytellingMode
-          ? withModelStorytellingPrompts
-          : withModelSinglePrompts;
-      
-      const prompts = imagePromptsSource.slice(0, numConcepts);
-      setImagePrompts(prompts);
+          setGenerationStatus(`Membuat konsep gambar (${i + 1} dari ${numConcepts})...`);
+          
+          const scenePrompt = prompts[i];
+          
+          const selectedAngle = (cameraAngle === 'Random (Auto)' && !isStorytellingMode)
+              ? CAMERA_ANGLE_OPTIONS[Math.floor(Math.random() * (CAMERA_ANGLE_OPTIONS.length - 1)) + 1]
+              : cameraAngle;
+          
+          const sceneDirective = `
+---
+**SCENE DIRECTIVE**
+- **Core Concept:** ${scenePrompt}
+- **Location:** ${subLocation} (This is mandatory).
+- **Overall Mood:** ${mood}.
+- **Camera Style:** ${cameraStyle}.
+- **Camera Angle:** ${selectedAngle === 'Random (Auto)' ? 'As described in concept' : selectedAngle}.
+- **Product Focus:** The product (${productCategory}) from the provided images must be clearly and accurately represented. ${isApparel && !isNoModelMode ? 'The model MUST be wearing the product.' : ''}
+- **Custom Notes:** ${customPrompt || 'None.'}
+---`;
+          
+          let finalPrompt;
+          const productProtocol = getProductProtocolPrompt(productReferenceStrength);
 
-      // --- SEQUENTIAL GENERATION WITH ANCHOR IMAGE ---
-      let anchorImage: ImageState | null = null;
+          if (isNoModelMode) {
+            finalPrompt = `${productProtocol}${sceneDirective}`;
+          } else {
+            const identityPrompt = getIdentityProtocolPrompt(!!anchorImage, faceReferenceStrength);
+            finalPrompt = `${identityPrompt}${productProtocol}${sceneDirective}`;
+          }
 
-      for (let i = 0; i < prompts.length; i++) {
-        setGenerationStatus(`Membuat konsep gambar (${i + 1} dari ${numConcepts})...`);
-        
-        const scenePrompt = prompts[i];
-        let finalPrompt;
-
-        if (isNoModelMode) {
-          finalPrompt = `${scenePrompt} ${finalCreativePrompt}`;
-        } else {
-          const identityPrompt = getIdentityProtocolPrompt(!!anchorImage);
-          finalPrompt = `${identityPrompt} ${scenePrompt} ${finalCreativePrompt}`;
-        }
-
-        const newImage = await generateImage(finalPrompt, i, anchorImage);
-        
-        if (newImage === null) {
-          // An error occurred (e.g., bad API key), stop the whole process.
-          break;
-        }
-
-        if (i === 0 && newImage) {
-          anchorImage = newImage;
+          const newImage = await generateImage(finalPrompt, i, anchorImage);
+          
+          if (isStorytellingMode && newImage) {
+            anchorImage = newImage;
+          }
         }
       }
-
     } catch (e) {
       if (!handleApiError(e)) {
         setGlobalError('Terjadi kesalahan tak terduga selama pembuatan. Silakan periksa konsol.');
@@ -524,88 +574,81 @@ Tempatkan orang yang konsisten ini dalam adegan berikut:`;
     } finally {
       setIsGenerating(false);
       setGenerationStatus(null);
+      isStoppingRef.current = false;
     }
   };
 
   const handleRegenerateImage = async (id: number) => {
     setResults(prev => prev.map(r => r.id === id ? { ...r, isLoading: true, error: null, imageUrl: null, mimeType: null, videoPrompt: null } : r));
     setIsGenerating(true);
+    setGenerationStatus('Sutradara AI sedang memikirkan ide baru...');
 
-    const anchorImage = (id > 0 && results[0]?.imageUrl && results[0]?.mimeType) 
-        ? { data: results[0].imageUrl, mimeType: results[0].mimeType } 
-        : null;
+    try {
+        const anchorImage = (isStorytellingMode && id > 0 && results[0]?.imageUrl && results[0]?.mimeType) 
+            ? { data: results[0].imageUrl, mimeType: results[0].mimeType } 
+            : null;
 
-    if (id > 0 && !anchorImage) {
-        console.error("Cannot regenerate image without a valid anchor image.");
-        setResults(prev => prev.map(r => r.id === id ? { ...r, isLoading: false, error: 'Butuh anchor image.' } : r));
-        setIsGenerating(false);
-        return;
-    }
-
-    const scenePrompt = imagePrompts[id];
-    let finalPrompt;
-
-    if (isNoModelMode) {
-        finalPrompt = `${scenePrompt} ${creativePrompt}`;
-    } else {
-        const identityPrompt = getIdentityProtocolPrompt(!!anchorImage);
-        finalPrompt = `${identityPrompt} ${scenePrompt} ${creativePrompt}`;
-    }
-
-    setGenerationStatus(`Membuat ulang gambar ${id + 1}...`);
-    const newImage = await generateImage(finalPrompt, id, anchorImage);
-    
-    if (newImage === null) {
-      // API error handled inside generateImage, just stop here.
-      setIsGenerating(false);
-      setGenerationStatus(null);
-      return;
-    }
-
-    if (id === 0 && newImage) {
-        const newAnchor = newImage;
-        for (let i = 1; i < numConcepts; i++) {
-            setGenerationStatus(`Membuat ulang konsep (${i + 1} dari ${numConcepts}) dengan anchor baru...`);
-            const subsequentScenePrompt = imagePrompts[i];
-            const identityPrompt = getIdentityProtocolPrompt(true);
-            const subsequentFinalPrompt = `${identityPrompt} ${subsequentScenePrompt} ${creativePrompt}`;
-            const result = await generateImage(subsequentFinalPrompt, i, newAnchor);
-            if (result === null) break;
+        if (isStorytellingMode && id > 0 && !anchorImage) {
+            throw new Error("Cannot regenerate storytelling image without a valid anchor image.");
         }
+        
+        const newScenePrompts = await generateScenePrompts(1);
+        const newScenePrompt = newScenePrompts[0];
+        
+        const newImagePrompts = [...imagePrompts];
+        newImagePrompts[id] = newScenePrompt;
+        setImagePrompts(newImagePrompts);
+
+        const selectedAngle = (cameraAngle === 'Random (Auto)' && !isStorytellingMode)
+            ? CAMERA_ANGLE_OPTIONS[Math.floor(Math.random() * (CAMERA_ANGLE_OPTIONS.length - 1)) + 1]
+            : cameraAngle;
+
+        const sceneDirective = `
+---
+**SCENE DIRECTIVE**
+- **Core Concept:** ${newScenePrompt}
+- **Location:** ${subLocation} (This is mandatory).
+- **Overall Mood:** ${mood}.
+- **Camera Style:** ${cameraStyle}.
+- **Camera Angle:** ${selectedAngle === 'Random (Auto)' ? 'As described in concept' : selectedAngle}.
+- **Product Focus:** The product (${productCategory}) from the provided images must be clearly and accurately represented. ${isApparel && !isNoModelMode ? 'The model MUST be wearing the product.' : ''}
+- **Custom Notes:** ${customPrompt || 'None.'}
+---`;
+
+        let finalPrompt;
+        const productProtocol = getProductProtocolPrompt(productReferenceStrength);
+
+        if (isNoModelMode) {
+            finalPrompt = `${productProtocol}${sceneDirective}`;
+        } else {
+            const identityPrompt = getIdentityProtocolPrompt(!!anchorImage, faceReferenceStrength);
+            finalPrompt = `${identityPrompt}${productProtocol}${sceneDirective}`;
+        }
+
+        setGenerationStatus(`Membuat ulang gambar ${id + 1}...`);
+        await generateImage(finalPrompt, id, anchorImage);
+    } catch (e) {
+        if (!handleApiError(e)) {
+            setResults(prev => prev.map(r => r.id === id ? { ...r, isLoading: false, error: 'Gagal membuat ulang gambar.' } : r));
+        }
+    } finally {
+        setGenerationStatus(null);
+        setIsGenerating(false);
     }
-    setGenerationStatus(null);
-    setIsGenerating(false);
   };
 
   const getButtonText = () => {
-    if (isGenerating) return 'Menghasilkan...';
     if (!faceApiReady) return 'Mempersiapkan Deteksi Wajah...';
-    if (!apiKey) return 'Setel Kunci API untuk Memulai';
     return 'Hasilkan Konsep';
   };
 
-  const isGenerateDisabled = isGenerating || !faceApiReady || !apiKey || ((!isNoModelMode && !modelImages[0]) || !productImages[0] || !campaignTitle);
-
   return (
     <div className="min-h-screen bg-brand-bg text-text-main font-sans">
-      <ApiKeyModal 
-        isOpen={isApiKeyModalOpen}
-        onClose={() => setIsApiKeyModalOpen(false)}
-        onSave={handleSaveApiKey}
-        currentKey={apiKey}
-      />
-      <header className="py-4 px-8 border-b border-border-color flex justify-between items-center sticky top-0 bg-brand-bg/80 backdrop-blur-sm z-20">
+      <header className="py-4 px-8 border-b border-border-color flex justify-between items-center sticky top-0 bg-brand-bg/80 backdrop-blur-sm z-10">
         <div className="text-left">
             <h1 className="text-3xl font-bold text-white">Affiliate video base</h1>
             <p className="text-text-secondary mt-1">Buat brief kreatif dan konsep visual untuk video pemasaran afiliasi Anda.</p>
         </div>
-        <button 
-          onClick={() => setIsApiKeyModalOpen(true)}
-          className="flex items-center bg-surface px-4 py-2 rounded-lg text-sm font-semibold hover:bg-primary/20 hover:text-primary-focus focus:outline-none focus:ring-2 focus:ring-primary-focus transition-colors"
-        >
-          <KeyIcon className="h-5 w-5 mr-2" />
-          Setel Kunci API
-        </button>
       </header>
       
       {isFaceCropModalOpen && imageForFaceCrop && (
@@ -649,7 +692,7 @@ Tempatkan orang yang konsisten ini dalam adegan berikut:`;
                       </div>
                       <div>
                           <label htmlFor="customPrompt" className="block text-sm font-semibold mb-2 text-white">Prompt Kreatif Kustom (Opsional)</label>
-                          <textarea id="customPrompt" value={customPrompt} onChange={e => setCustomPrompt(e.target.value)} rows={3} className="w-full bg-brand-bg border border-border-color rounded-md p-2 text-sm resize-none focus:ring-2 focus:ring-primary-focus outline-none transition-colors" placeholder="cth. Model tertawa sambil berlari di ladang bunga, memakai jam tangan..." />
+                          <textarea id="customPrompt" value={customPrompt} onChange={e => setCustomPrompt(e.target.value)} rows={4} className="w-full bg-brand-bg border border-border-color rounded-md p-2 text-sm resize-none focus:ring-2 focus:ring-primary-focus outline-none transition-colors" placeholder="cth. Model tertawa sambil berlari di ladang bunga, memakai jam tangan..." />
                       </div>
                       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                           <div>
@@ -703,6 +746,42 @@ Tempatkan orang yang konsisten ini dalam adegan berikut:`;
                                   {[1, 2, 3, 4, 5, 6].map(n => <option key={n} value={n}>{n}</option>)}
                               </select>
                           </div>
+                      </div>
+                      <div>
+                          <label htmlFor="faceReferenceStrength" className={`block text-sm font-semibold mb-2 ${isNoModelMode ? 'text-text-secondary' : 'text-white'}`}>
+                              Kekuatan Referensi Wajah ({faceReferenceStrength}%)
+                          </label>
+                          <input
+                              type="range"
+                              id="faceReferenceStrength"
+                              min="50"
+                              max="100"
+                              value={faceReferenceStrength}
+                              onChange={e => setFaceReferenceStrength(parseInt(e.target.value, 10))}
+                              disabled={isNoModelMode}
+                              className="w-full h-2 bg-border-color rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:bg-primary [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full disabled:opacity-50 disabled:cursor-not-allowed"
+                          />
+                          <p className={`text-xs text-text-secondary mt-1 ${isNoModelMode ? 'opacity-50' : ''}`}>
+                              Kontrol seberapa ketat AI harus mengikuti wajah model. 100% untuk kemiripan yang tepat.
+                          </p>
+                      </div>
+                      <div>
+                          <label htmlFor="productReferenceStrength" className={`block text-sm font-semibold mb-2 ${!productImages[0] ? 'text-text-secondary' : 'text-white'}`}>
+                              Kekuatan Referensi Produk ({productReferenceStrength}%)
+                          </label>
+                          <input
+                              type="range"
+                              id="productReferenceStrength"
+                              min="50"
+                              max="100"
+                              value={productReferenceStrength}
+                              onChange={e => setProductReferenceStrength(parseInt(e.target.value, 10))}
+                              disabled={!productImages[0]}
+                              className="w-full h-2 bg-border-color rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:bg-primary [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full disabled:opacity-50 disabled:cursor-not-allowed"
+                          />
+                          <p className={`text-xs text-text-secondary mt-1 ${!productImages[0] ? 'opacity-50' : ''}`}>
+                              Kontrol seberapa ketat AI harus mengikuti foto produk. 100% untuk duplikasi yang tepat.
+                          </p>
                       </div>
                       <div className="flex items-center pt-2 space-x-6">
                           <label htmlFor="isApparel" className="flex items-center space-x-3 cursor-pointer">
@@ -798,13 +877,22 @@ Tempatkan orang yang konsisten ini dalam adegan berikut:`;
               </div>
               
               <div className="mt-8 text-center">
-                  <button 
-                      onClick={handleGenerate} 
-                      disabled={isGenerateDisabled}
-                      className="bg-primary text-white font-bold py-3 px-10 rounded-lg text-lg hover:bg-primary-focus focus:outline-none focus:ring-4 focus:ring-primary-focus/50 transition-all duration-300 disabled:bg-gray-600 disabled:cursor-not-allowed shadow-lg hover:shadow-primary/40 disabled:shadow-none transform hover:-translate-y-1"
-                  >
-                      {getButtonText()}
-                  </button>
+                  {!isGenerating ? (
+                      <button 
+                          onClick={handleGenerate} 
+                          disabled={!faceApiReady || ((!isNoModelMode && !modelImages[0]) || !productImages[0] || !campaignTitle)}
+                          className="bg-primary text-white font-bold py-3 px-10 rounded-lg text-lg hover:bg-primary-focus focus:outline-none focus:ring-4 focus:ring-primary-focus/50 transition-all duration-300 disabled:bg-gray-600 disabled:cursor-not-allowed shadow-lg hover:shadow-primary/40 disabled:shadow-none transform hover:-translate-y-1"
+                      >
+                          {getButtonText()}
+                      </button>
+                  ) : (
+                      <button 
+                          onClick={handleStopGeneration} 
+                          className="bg-red-600 text-white font-bold py-3 px-10 rounded-lg text-lg hover:bg-red-700 focus:outline-none focus:ring-4 focus:ring-red-700/50 transition-all duration-300 shadow-lg hover:shadow-red-600/40 transform hover:-translate-y-1"
+                      >
+                          Hentikan Generasi
+                      </button>
+                  )}
                   {globalError && <p className="text-red-400 text-sm mt-4">{globalError}</p>}
               </div>
           </div>
@@ -819,7 +907,7 @@ Tempatkan orang yang konsisten ini dalam adegan berikut:`;
           handleApiError={handleApiError}
           onGenerateBrief={handleGenerateBrief}
           onRegenerateImage={handleRegenerateImage}
-          apiKey={apiKey}
+          isNoModelMode={isNoModelMode}
         />
       </div>
     </div>

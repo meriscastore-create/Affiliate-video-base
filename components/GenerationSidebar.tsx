@@ -12,7 +12,7 @@ interface GenerationSidebarProps {
   handleApiError: (error: unknown) => boolean;
   onGenerateBrief: (id: number) => void;
   onRegenerateImage: (id: number) => void;
-  apiKey: string | null;
+  isNoModelMode: boolean;
 }
 
 const GenerationStatus: React.FC<{ status: string | null }> = ({ status }) => (
@@ -35,7 +35,7 @@ const GenerationSidebar: React.FC<GenerationSidebarProps> = ({
     handleApiError,
     onGenerateBrief,
     onRegenerateImage,
-    apiKey
+    isNoModelMode
 }) => {
   return (
     <>
@@ -76,7 +76,7 @@ const GenerationSidebar: React.FC<GenerationSidebarProps> = ({
                   handleApiError={handleApiError}
                   onGenerateBrief={onGenerateBrief}
                   onRegenerateImage={onRegenerateImage}
-                  apiKey={apiKey}
+                  isNoModelMode={isNoModelMode}
                 />
               ))}
             </div>

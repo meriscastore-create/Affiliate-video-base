@@ -14,10 +14,10 @@ interface ResultCardProps {
   handleApiError: (error: unknown) => boolean;
   onGenerateBrief: (id: number) => void;
   onRegenerateImage: (id: number) => void;
-  apiKey: string | null;
+  isNoModelMode: boolean;
 }
 
-const ResultCard: React.FC<ResultCardProps> = ({ id, imageUrl, videoPrompt, isLoading, error, handleApiError, onGenerateBrief, onRegenerateImage, apiKey }) => {
+const ResultCard: React.FC<ResultCardProps> = ({ id, imageUrl, videoPrompt, isLoading, error, handleApiError, onGenerateBrief, onRegenerateImage, isNoModelMode }) => {
   const [showJson, setShowJson] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -70,10 +70,6 @@ const ResultCard: React.FC<ResultCardProps> = ({ id, imageUrl, videoPrompt, isLo
   };
 
   const handleGenerateVideoPrompt = async () => {
-    if (!apiKey) {
-        setPromptError('Kunci API tidak diatur.');
-        return;
-    }
     if (!videoPrompt) {
         setPromptError('Data brief tidak ditemukan untuk membuat prompt video.');
         return;
@@ -83,22 +79,45 @@ const ResultCard: React.FC<ResultCardProps> = ({ id, imageUrl, videoPrompt, isLo
     setPromptError(null);
 
     try {
-        const ai = new GoogleGenAI({ apiKey });
+        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-        const voiceOverText = videoPrompt.audio_generation_parameters.voiceover.script_lines
-            .map(line => line.text)
-            .join(' ');
+        const baseVoiceoverInstructions = `- **VOICEOVER SCRIPT:** For the 'voice_over.text' field, you must generate a NEW, short, natural-sounding script. The tone MUST be conversational and authentic, like a real content creator sharing a personal discovery. It MUST follow this narrative structure:
+    1. **RELATABLE PROBLEM (HOOK):** Start with a common frustration the product solves.
+    2. **PAST SKEPTICISM/STRUGGLE:** Briefly mention past beliefs or struggles before the product.
+    3. **THE DISCOVERY (PRODUCT):** Introduce the product as the solution.
+    4. **EMOTIONAL REACTION (SOFT CTA):** End with a genuine reaction of satisfaction. This is the call-to-action.
 
-        const generationPrompt = `Based on the following detailed video brief, generate a new, concise video generation prompt JSON.
+- **STYLE REFERENCE (DO NOT COPY, USE FOR TONE/STRUCTURE):** "Baru dandan rapi, eh beberapa jam kemudian mascara udah luntur 😩 Aku pikir semua mascara sama aja, tapi pas coba Inesglam, ternyata beda. Nggak luntur, nggak berat, dan bulu mata tetap lentik seharian. Sumpah, senang banget!”`;
+
+        let generationPrompt: string;
+        
+        if (isNoModelMode) {
+          generationPrompt = `Based on the detailed video brief provided below, generate a new, concise video generation prompt JSON.
 This new JSON must strictly adhere to the provided schema.
 IMPORTANT: The entire final JSON output MUST be less than 1000 characters long. Be very concise.
-- The 'prompt' field must be a descriptive paragraph that crafts a compelling visual hook, making it feel authentic and like it's from a real content creator. It MUST include a phrase explicitly stating that the character is lip-syncing to the voice-over audio (e.g., 'the influencer is seen lip-syncing to the audio').
-- The 'voice_over.text' field must be this exact string: "${voiceOverText}"
-- Keep all string values concise and engaging.
+
+**Instructions for PRODUCT-ONLY Video:**
+- The 'prompt' field must describe a dynamic, visually appealing scene focusing ONLY on the product.
+- The 'style' field MUST primarily include: "clean, no text, no watermark, no popup, no sticker". You can add other style descriptors after these.
+${baseVoiceoverInstructions}
 - The entire output must be a single, valid JSON object with no extra characters or formatting.
 
 Detailed Brief for context:
 ${JSON.stringify(videoPrompt)}`;
+        } else {
+          generationPrompt = `Based on the detailed video brief provided below, generate a new, concise video generation prompt JSON.
+This new JSON must strictly adhere to the provided schema.
+IMPORTANT: The entire final JSON output MUST be less than 1000 characters long. Be very concise.
+
+**Instructions for Video with Model:**
+- The 'prompt' field must be a descriptive paragraph that crafts a compelling visual hook, making it feel authentic and like it's from a real content creator. It MUST include a phrase explicitly stating that the character is lip-syncing to the audio (e.g., 'the influencer is seen lip-syncing to the audio').
+- The 'style' field MUST primarily include: "clean, no text, no watermark, no popup, no sticker". You can add other style descriptors after these.
+${baseVoiceoverInstructions}
+- The entire output must be a single, valid JSON object with no extra characters or formatting.
+
+Detailed Brief for context:
+${JSON.stringify(videoPrompt)}`;
+        }
 
         const response = await ai.models.generateContent({
             model: 'gemini-2.5-flash',

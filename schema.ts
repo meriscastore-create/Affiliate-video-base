@@ -1,5 +1,28 @@
 
+
 import { Type } from "@google/genai";
+
+export const scenePromptsSchema = {
+  type: Type.OBJECT,
+  properties: {
+    prompts: {
+      type: Type.ARRAY,
+      description: "An array of unique and creative scene concepts.",
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          scene_prompt: {
+            type: Type.STRING,
+            description: "A single, detailed paragraph describing a visual scene concept for an influencer-style video.",
+          },
+        },
+        required: ["scene_prompt"],
+      },
+    },
+  },
+  required: ["prompts"],
+};
+
 
 export const videoPromptSchema = {
   type: Type.OBJECT,
