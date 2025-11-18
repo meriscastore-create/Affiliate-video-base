@@ -1,7 +1,10 @@
+
+
+// Fix: Corrected the import statement for React and its hooks.
 import React, { useState, useEffect, useRef } from 'react';
 import { GoogleGenAI, Modality, Type } from "@google/genai";
 import { BriefData } from './types';
-import { briefDataSchema, scenePromptsSchema } from './schema';
+import { briefDataSchema, scenePromptsSchema, productAnalysisSchema } from './schema';
 import ImageUploader from './components/ImageUploader';
 import GenerationSidebar from './components/GenerationSidebar';
 import FaceCropModal from './components/FaceCropModal';
@@ -13,8 +16,10 @@ import {
   OUTDOOR_LOCATIONS,
   PRODUCT_CATEGORIES,
   LOCATION_TYPE_OPTIONS,
-  VOICEOVER_STYLE_OPTIONS
+  VOICEOVER_STYLE_OPTIONS,
+  STUDIO_MINI_LOCATIONS
 } from './constants';
+import { productHandPrompt, productPlacedPrompt } from './prompts';
 
 
 declare global {
@@ -34,8 +39,6 @@ export type ResultItem = {
 
 export type ImageState = { data: string; mimeType: string };
 
-const delay = (ms: number) => new Promise(res => setTimeout(res, ms));
-
 const App: React.FC = () => {
   const [modelImages, setModelImages] = useState<(ImageState | null)[]>(Array(5).fill(null));
   const [productImages, setProductImages] = useState<(ImageState | null)[]>(Array(6).fill(null));
@@ -45,6 +48,7 @@ const App: React.FC = () => {
   
   const [campaignTitle, setCampaignTitle] = useState('');
   const [productDescription, setProductDescription] = useState('');
+  const [productLink, setProductLink] = useState('');
   const [productReviews, setProductReviews] = useState('');
   const [cameraStyle, setCameraStyle] = useState(CAMERA_OPTIONS[0]);
   const [mood, setMood] = useState(MOOD_OPTIONS[0]);
@@ -60,6 +64,8 @@ const App: React.FC = () => {
   const [isNoModelMode, setIsNoModelMode] = useState(false);
   const [faceReferenceStrength, setFaceReferenceStrength] = useState(100);
   const [productReferenceStrength, setProductReferenceStrength] = useState(100);
+  const [customBackground, setCustomBackground] = useState<ImageState | null>(null);
+  const [productPresentationStyle, setProductPresentationStyle] = useState<'hand' | 'placed'>('placed');
 
 
   const [activeUploader, setActiveUploader] = useState<string>('model-0');
@@ -81,6 +87,11 @@ const App: React.FC = () => {
   
   // Ref for stopping generation
   const isStoppingRef = useRef(false);
+
+  // State for product data fetching
+  const [isFetchingProductData, setIsFetchingProductData] = useState(false);
+  const [productFetchStatus, setProductFetchStatus] = useState<{ type: 'success' | 'error', message: string } | null>(null);
+
 
   useEffect(() => {
     const loadFaceApiModels = async () => {
@@ -107,10 +118,38 @@ const App: React.FC = () => {
   useEffect(() => {
     if (locationType === 'Indoor') {
       setSubLocation(INDOOR_LOCATIONS[0]);
-    } else {
+    } else if (locationType === 'Outdoor') {
       setSubLocation(OUTDOOR_LOCATIONS[0]);
+    } else if (locationType === 'Studio Mini') {
+      setSubLocation(STUDIO_MINI_LOCATIONS[0]);
     }
   }, [locationType]);
+  
+  const userCustomPromptRef = useRef(customPrompt);
+
+  // Update user's custom prompt ref whenever it's not one of the special prompts
+  useEffect(() => {
+      if (customPrompt !== productHandPrompt && customPrompt !== productPlacedPrompt) {
+          userCustomPromptRef.current = customPrompt;
+      }
+  }, [customPrompt]);
+
+  // Automatically set/unset the prompt for "Product Only" mode
+  useEffect(() => {
+      if (isNoModelMode) {
+          if (productPresentationStyle === 'hand') {
+              setCustomPrompt(productHandPrompt);
+          } else {
+              setCustomPrompt(productPlacedPrompt);
+          }
+      } else {
+          // Revert to user's last known prompt when leaving no model mode
+          if (customPrompt === productHandPrompt || customPrompt === productPlacedPrompt) {
+             setCustomPrompt(userCustomPromptRef.current);
+          }
+      }
+  }, [isNoModelMode, productPresentationStyle]);
+
 
   const processFile = (file: File, callback: (imageState: ImageState) => void) => {
     const reader = new FileReader();
@@ -130,6 +169,16 @@ const App: React.FC = () => {
       setIsApparel(false);
       setModelImages(Array(5).fill(null)); // Clear model images
       setCroppedModelFace(null); // Clear cropped face
+    } else {
+      // When disabling no-model mode, reset selections that are only available in that mode.
+      setCustomBackground(null);
+      setProductPresentationStyle('placed');
+      if (locationType === 'Studio Mini') {
+        setLocationType(LOCATION_TYPE_OPTIONS[0]); // Reset to 'Indoor'
+      }
+      if (cameraAngle === 'Product Close-up') {
+        setCameraAngle(CAMERA_ANGLE_OPTIONS[0]); // Reset to first default option
+      }
     }
   };
 
@@ -140,6 +189,10 @@ const App: React.FC = () => {
       if (file && file.type.startsWith('image/')) {
         event.preventDefault();
         processFile(file, (imageState) => {
+          if (activeUploader === 'custom-bg' && isNoModelMode) {
+            setCustomBackground(imageState);
+            return;
+          }
           const [type, indexStr] = activeUploader.split('-');
           const index = parseInt(indexStr, 10);
           if (type === 'model' && !isNoModelMode) {
@@ -205,6 +258,68 @@ const App: React.FC = () => {
       return false; // It was a different error
   }
   
+    const handleFetchProductData = async () => {
+        if (!productLink || !productLink.startsWith('http')) {
+            setProductFetchStatus({ type: 'error', message: 'Harap masukkan URL produk yang valid.' });
+            return;
+        }
+
+        setIsFetchingProductData(true);
+        setProductFetchStatus(null);
+        setGlobalError(null);
+
+        try {
+            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+            
+            const availableCategories = PRODUCT_CATEGORIES.join(', ');
+            const analysisPrompt = `You are an expert data extractor for e-commerce, specifically for Shopee links (shopee.co.id, id.shp.ee). Your task is to extract information from the provided URL with extreme precision. Do NOT summarize or rephrase.
+            
+            URL: ${productLink}
+            
+            Provide the following details in a JSON format that strictly adheres to the provided schema.
+            
+            1. **product_name (VITAL):** Copy the product title EXACTLY as it appears on the product page. Do not alter it in any way.
+            2. **description (VITAL):** Copy the entire product description text EXACTLY as it appears on the page. Do not summarize, shorten, or rephrase it.
+            3. **product_category (VITAL):** Analyze the product and select the single most appropriate category from this exact list: [${availableCategories}]. The output must be one of the strings from this list.
+            4. **reviews_summary**: Summarize 2-3 of the most helpful or representative customer reviews. Format them as short, quoted sentences.
+            5. **image_search_terms**: Provide 3-4 specific Google search terms for finding high-quality images of this product.
+
+            The entire output must be a single, valid JSON object. The accuracy of 'product_name', 'description', and 'product_category' is your highest priority.`;
+
+            const response = await ai.models.generateContent({
+                model: 'gemini-2.5-flash',
+                contents: analysisPrompt,
+                config: {
+                    responseMimeType: "application/json",
+                    responseSchema: productAnalysisSchema,
+                }
+            });
+
+            const productData = JSON.parse(response.text);
+            
+            setCampaignTitle(productData.product_name || '');
+            setProductDescription(productData.description || '');
+            setProductReviews(productData.reviews_summary || '');
+            if (productData.product_category && PRODUCT_CATEGORIES.includes(productData.product_category)) {
+                setProductCategory(productData.product_category);
+            }
+            
+            // Clear existing images and prompt user to upload new ones
+            setProductImages(Array(6).fill(null));
+
+            const searchTermsText = productData.image_search_terms.join('; ');
+            setProductFetchStatus({ type: 'success', message: `Data teks berhasil diambil. Sekarang, silakan unggah gambar produk. Coba cari dengan: "${searchTermsText}"` });
+
+        } catch (error) {
+            console.error("Error fetching product data with AI:", error);
+            if (!handleApiError(error)) {
+                 setProductFetchStatus({ type: 'error', message: 'Gagal menganalisis URL. Pastikan link dapat diakses publik dan coba lagi.' });
+            }
+        } finally {
+            setIsFetchingProductData(false);
+        }
+    };
+  
   const handleGenerateBrief = async (id: number) => {
       const resultItem = results.find(r => r.id === id);
       if (!resultItem || !resultItem.imageUrl || !resultItem.mimeType) return;
@@ -259,8 +374,8 @@ Product Category: ${productCategory}.`;
     6. DEMO / HOW-TO: Show it in action.
     7. SOCIAL PROOF: A quick testimonial or stat.
     8. OFFER / URGENCY: The deal.
-    9. CTA: Call to Action.
-- The total length of all combined script lines must be ${voiceoverStyle === 'Simpel' ? 'less than 170 characters for a SIMPLE style.' : 'less than 300 characters for a DETAILED style.'}`;
+    9. CTA: ${voiceoverStyle === 'Simpel' ? 'This MUST be exactly: "ada diskon 70% via keranjang kiri bawah..!!"' : 'Create a compelling Call to Action.'}
+- The total length of all combined script lines must be ${voiceoverStyle === 'Simpel' ? 'less than 175 characters for a SIMPLE style.' : 'less than 300 characters for a DETAILED style.'}`;
         
         if (productReviews.trim()) {
           jsonPrompt += `\n\n- INSPIRATION: Use the following customer reviews as strong inspiration for the voiceover script lines (especially for the 'Social Proof' part):\n${productReviews}`;
@@ -299,6 +414,15 @@ Product Category: ${productCategory}.`;
     let creativeDirectorPrompt: string;
 
     if (isNoModelMode) {
+        let presentationContext: string;
+        if (customBackground) {
+            presentationContext = productPresentationStyle === 'hand'
+                ? `The product is presented being held by an elegant, beautiful female hand. This is all set against a custom user-provided background.`
+                : `The product is presented placed aesthetically on a custom user-provided background.`;
+        } else {
+            presentationContext = `The scene takes place in a setting like: ${subLocation}.`;
+        }
+
         creativeDirectorPrompt = `You are a world-class Product Photographer's Creative Director.
 Your task is to generate ${count} unique, visually stunning concepts for a product-only photoshoot.
 The core theme is to make the product look iconic and desirable.
@@ -307,7 +431,8 @@ Think about unique environments, lighting, and compositions. DO NOT be generic.
 **Product Information:**
 - Category: ${productCategory}
 - Description: ${productDescription || 'No description provided.'}
-- Location Context: ${subLocation}
+${productLink ? `- Product Link for Analysis: ${productLink}\n` : ''}
+- Presentation Context: ${presentationContext}
 - Overall Mood: ${mood}
 
 Each concept must be a single, descriptive paragraph.
@@ -321,6 +446,7 @@ The central theme is **ENTHUSIASTIC & HONEST REVIEW**. The influencer genuinely 
 
 **Creative Constraints & Inspiration:**
 - **Product:** A ${productCategory} described as: "${productDescription || 'No description provided.'}"
+${productLink ? `- Product Link for additional context: ${productLink}\n` : ''}
 - **Location:** The scene MUST take place in a setting like: **${subLocation}**.
 - **Overall Mood:** The vibe should be **${mood}**.
 
@@ -371,6 +497,11 @@ The central theme is **ENTHUSIASTIC & HONEST REVIEW**. The influencer genuinely 
             if (anchorImage) { // This condition is only true for index > 0
                 requestParts.push({ inlineData: { mimeType: anchorImage.mimeType, data: anchorImage.data.split(',')[1] } });
             }
+        } else {
+             // CRITICAL: Custom background MUST be the first image if provided.
+             if (customBackground) {
+                requestParts.push({ inlineData: { mimeType: customBackground.mimeType, data: customBackground.data.split(',')[1] } });
+            }
         }
 
         // --- PRODUCT IMAGES ---
@@ -415,501 +546,661 @@ The central theme is **ENTHUSIASTIC & HONEST REVIEW**. The influencer genuinely 
     if (strength >= 95) {
         primaryObjective = `Your most critical task is to perfectly replicate the identity of the person in the reference images. Failure to match the face, especially its unique contour and structure, is a complete failure of the entire task.`;
         faceMatchInstruction = `The generated person's facial features—eyes, nose, mouth, jawline, cheekbones, and especially the overall **facial contour and structure**—MUST be an EXACT, non-negotiable match to the cropped face provided in IMAGE 1. This is the master face template. Study it meticulously.`;
-    } else if (strength >= 75) {
-        primaryObjective = `Your primary task is to create a person who is immediately and unmistakably recognizable as the model in the reference images. A very high degree of likeness is required.`;
-        faceMatchInstruction = `The generated person's facial features MUST be a VERY CLOSE MATCH to the cropped face in IMAGE 1. Prioritize capturing the key **facial contour and structure** (jawline, cheekbones). Minor variations in expression are acceptable, but the core identity must be immediately recognizable.`;
-    } else { // 50-74
-        primaryObjective = `Your primary task is to create a person who is strongly inspired by the model in the reference images. A clear resemblance is required, but some artistic interpretation is allowed.`;
-        faceMatchInstruction = `The generated person's face MUST be STRONGLY INSPIRED by the cropped face in IMAGE 1. A clear resemblance is required, especially in the **facial contour and structure**, but you have artistic freedom for the expression and subtle details. The person should look like a plausible version of the model, not an exact copy.`;
-    }
-    
-    let prompt = `
-== CORE IDENTITY PROTOCOL (NON-NEGOTIABLE) ==
-1.  **PRIMARY OBJECTIVE:** ${primaryObjective}
-2.  **FACE REFERENCE (IMAGE 1):** ${faceMatchInstruction}
-3.  **BODY & STYLE REFERENCE (IMAGE 2):** The person's body type, physique, hair style, hair color, and skin tone MUST match the main model photo in IMAGE 2.
-`;
-
-    if (hasAnchorImage) {
-        prompt += `4. **CONSISTENCY CHECK (IMAGE 3):** The previous image (IMAGE 3) is provided as a reference. Ensure the identity remains perfectly consistent with this last successful generation.\n`;
+    } else if (strength >= 80) {
+        primaryObjective = `Your primary goal is to create a person who is strongly identifiable as the person in the reference images. Minor deviations are acceptable only if they enhance realism.`;
+        faceMatchInstruction = `The generated person's facial features MUST be a very strong likeness to the cropped face in IMAGE 1. Pay close attention to the unique shape of the face and key features.`;
+    } else if (strength >= 60) {
+        primaryObjective = `Your goal is to generate a person who is clearly inspired by the reference images, maintaining key recognizable traits.`;
+        faceMatchInstruction = `Use the cropped face in IMAGE 1 as a strong visual guide. Ensure the generated person shares a clear family resemblance, particularly in hair color, skin tone, and general face shape.`;
+    } else {
+        primaryObjective = `Your goal is to generate a new, unique person who is loosely inspired by the general aesthetic of the reference images.`;
+        faceMatchInstruction = `Use the reference images for general inspiration regarding ethnicity, hair style, and overall vibe. Do NOT attempt to create a direct copy of the face.`;
     }
 
-    prompt += `
-== CREATIVE BRIEF (YOUR MAIN TASK) ==
-Your creative assignment is to place the person defined above into a completely NEW, unique, and compelling scene as described in the 'SCENE DIRECTIVE' that follows this protocol. The reference images are ONLY for identity, not for creative inspiration.
+    const anchorImageInstruction = hasAnchorImage
+        ? `Additionally, IMAGE 3 is a previously generated image from this same sequence. Use it as a secondary, but still very important, reference to maintain consistency in style, lighting, and the person's appearance from the previous frame.`
+        : '';
 
-== FORBIDDEN ACTIONS (STRICTLY ENFORCED) ==
-- **DO NOT** copy the pose from any reference image.
-- **DO NOT** copy the background, environment, or location from any reference image.
-- **DO NOT** copy the lighting style from any reference image.
-- **DO NOT** create a simple portrait or studio shot unless the SCENE DIRECTIVE explicitly asks for it. Be creative.
----
-`;
-    return prompt;
-};
+    return `\n\n**IDENTITY PROTOCOL (STRENGTH: ${strength}/100):**
+${primaryObjective}
+- ${faceMatchInstruction}
+- IMAGE 2 (the full body shot) provides context for hair style, body type, and overall aesthetic.
+- ${anchorImageInstruction}`;
+  };
 
-const getProductProtocolPrompt = (strength: number): string => {
-    const mainProductImage = productImages.find((img): img is ImageState => img !== null);
-    if (!mainProductImage) return '';
+  const getProductProtocolPrompt = (strength: number): string => {
+      let productMatchInstruction: string;
+      if (strength >= 95) {
+          productMatchInstruction = `The product shown in the generated image MUST be an EXACT, pixel-perfect replica of the product in the reference image. Every detail, logo, color, and texture must be identical. No creative liberties are allowed.`;
+      } else if (strength >= 80) {
+          productMatchInstruction = `The product shown MUST be a very close match to the reference image. It should be immediately identifiable as the same product, allowing for only minor, almost unnoticeable, variations in lighting or angle.`;
+      } else {
+          productMatchInstruction = `The generated product should be strongly inspired by the reference image in terms of type, shape, and color. It should fit the same category and general design, but can be a different model or have slight variations.`;
+      }
+      return `\n\n**PRODUCT PROTOCOL (STRENGTH: ${strength}/100):**
+- ${productMatchInstruction}`;
+  };
+  
+  const getBackgroundProtocolPrompt = (): string => {
+    return `\n\n**BACKGROUND PROTOCOL (CRITICAL INSTRUCTION):**
+- The VERY FIRST image provided in the input is the custom background.
+- You MUST use this exact image as the background for the final scene.
+- DO NOT change, alter, modify, or generate a new background. Your task is to place the product onto this specific background image.
+- The final generated image must be a seamless composite. The lighting on the product must realistically match the lighting in the background image.`;
+  };
 
-    let productMatchInstruction: string;
-    let primaryObjective: string;
+  const constructFinalPrompt = (basePrompt: string, hasAnchorImage: boolean): string => {
+      let finalPrompt = basePrompt;
+      
+      if (!isNoModelMode) {
+          finalPrompt += getIdentityProtocolPrompt(hasAnchorImage, faceReferenceStrength);
+      }
+      
+      if (isNoModelMode && customBackground) {
+          finalPrompt += getBackgroundProtocolPrompt();
+      }
 
-    if (strength >= 95) {
-        primaryObjective = `Replikasi produk yang ditampilkan dalam gambar referensi dengan TEPAT dan akurat. Kegagalan dalam mencocokkan model, warna, dan merek spesifik produk adalah kegagalan besar.`;
-        productMatchInstruction = `Produk yang ditampilkan dalam adegan HARUS merupakan salinan yang TEPAT dan tidak bisa ditawar dari gambar produk utama yang disediakan. Ini termasuk model, warna, merek, tekstur, dan detail uniknya. Pelajari gambar produk dengan cermat.`;
-    } else if (strength >= 75) {
-        primaryObjective = `Buat produk yang sangat mirip dan dapat dikenali sebagai produk dalam gambar referensi. Tingkat kemiripan yang sangat tinggi diperlukan.`;
-        productMatchInstruction = `Produk yang ditampilkan HARUS SANGAT MIRIP dengan gambar produk utama. Harus jenis produk, warna, dan merek yang sama. Variasi kecil dalam sudut atau pantulan dapat diterima, tetapi identitas inti produk harus identik.`;
-    } else { // 50-74
-        primaryObjective = `Buat produk yang sangat terinspirasi oleh gambar referensi. Diperlukan kemiripan yang jelas, tetapi beberapa interpretasi artistik diizinkan.`;
-        productMatchInstruction = `Produk yang ditampilkan HARUS SANGAT TERINSPIRASI oleh gambar produk utama. Harus kategori dan gaya umum yang sama (misalnya, jam tangan pintar hitam yang tampak serupa), tetapi tidak harus model atau merek yang sama persis. Anda memiliki kebebasan artistik untuk detail halusnya.`;
-    }
-    
-    return `
-== PROTOKOL IDENTITAS PRODUK (TIDAK BISA DITAWAR) ==
-1.  **TUJUAN UTAMA:** ${primaryObjective}
-2.  **REFERENSI PRODUK:** ${productMatchInstruction}
----
-`;
-};
+      if (productImages.some(img => img !== null)) {
+          finalPrompt += getProductProtocolPrompt(productReferenceStrength);
+      }
 
+      finalPrompt += `\n\n**SCENE & STYLE DIRECTIVES:**
+- Camera/Lens Style: Recreate the distinct visual signature of a **${cameraStyle}**.
+- Camera Angle: ${isApparel ? 'Full Body Shot' : (isNoModelMode && !customBackground ? 'Product Close-up' : cameraAngle)}.
+- Mood & Atmosphere: The overall feeling must be **${mood}**.
+- Custom Instructions: ${customPrompt}`;
 
-  const handleStopGeneration = () => {
-    isStoppingRef.current = true;
-    setGenerationStatus('Menghentikan...');
+      return finalPrompt;
+  };
+  
+  const handleStop = () => {
+      isStoppingRef.current = true;
+      setIsGenerating(false);
+      setGenerationStatus('Stopping...');
   };
 
   const handleGenerate = async () => {
-    if ((!isNoModelMode && !modelImages[0]) || !productImages[0] || !campaignTitle) {
-      setGlobalError('Mohon isi kolom yang wajib diisi dan unggah foto yang diperlukan (Judul Kampanye, Foto Produk, dan Foto Model kecuali dalam mode Produk Saja).');
-      return;
-    }
     isStoppingRef.current = false;
+    setViewMode('results');
     setGlobalError(null);
     setIsGenerating(true);
+    setGenerationStatus('Generating creative concepts...');
+    
+    // Validate inputs
+    const mainProductImage = productImages.find(img => img !== null);
+    if (!mainProductImage) {
+        setGlobalError("Harap unggah setidaknya satu gambar produk.");
+        setIsGenerating(false);
+        return;
+    }
+    if (!isNoModelMode && !croppedModelFace) {
+        setGlobalError("Harap unggah gambar model dan konfirmasi pemotongan wajah.");
+        setIsGenerating(false);
+        return;
+    }
+    
     const initialResults: ResultItem[] = Array.from({ length: numConcepts }, (_, i) => ({
       id: i,
       imageUrl: null,
       mimeType: null,
       videoPrompt: null,
       isLoading: true,
-      error: null,
+      error: null
     }));
     setResults(initialResults);
-    setViewMode('results');
-
-    const statusUpdates = [
-        'Menganalisis foto model...',
-        'Mengekstrak detail wajah & postur...',
-        'Menganalisis semua foto produk...',
-        'Menghubungi Sutradara AI untuk ide...',
-        'Menyusun prompt visual...',
-        'Menghubungi AI untuk membuat visual...',
-    ];
-    
-    for (const status of statusUpdates) {
-        if (isStoppingRef.current) break;
-        setGenerationStatus(status);
-        await delay(900);
-    }
 
     try {
-      if (!isStoppingRef.current) {
-        setGenerationStatus('Sutradara AI sedang menyusun konsep...');
         const prompts = await generateScenePrompts(numConcepts);
-        setImagePrompts(prompts);
+        setImagePrompts(prompts); // Save prompts for regeneration
+        setGenerationStatus(`Generated ${numConcepts} concepts. Now generating images... (1/${numConcepts})`);
+        
+        let lastSuccessfulImage: ImageState | null = null;
 
-        let anchorImage: ImageState | null = null;
+        for (let i = 0; i < numConcepts; i++) {
+            if (isStoppingRef.current) {
+                console.log('Stopping generation process.');
+                setResults(prev => prev.map(r => r.isLoading ? { ...r, isLoading: false, error: 'Generation stopped by user.' } : r));
+                setGenerationStatus(null);
+                isStoppingRef.current = false; // Reset for next run
+                return;
+            }
+          
+            setGenerationStatus(`Generating image concept ${i + 1} of ${numConcepts}...`);
+            const finalPrompt = constructFinalPrompt(prompts[i], i > 0 && lastSuccessfulImage !== null);
+            const generatedImageState = await generateImage(finalPrompt, i, lastSuccessfulImage);
 
-        for (let i = 0; i < prompts.length; i++) {
-          if (isStoppingRef.current) {
-              setGenerationStatus('Generasi dihentikan oleh pengguna.');
-              setResults(prev => prev.map(r => r.isLoading ? { ...r, isLoading: false, error: 'Dibatalkan' } : r));
-              break;
-          }
-
-          setGenerationStatus(`Membuat konsep gambar (${i + 1} dari ${numConcepts})...`);
-          
-          const scenePrompt = prompts[i];
-          
-          const selectedAngle = (cameraAngle === 'Random (Auto)' && !isStorytellingMode)
-              ? CAMERA_ANGLE_OPTIONS[Math.floor(Math.random() * (CAMERA_ANGLE_OPTIONS.length - 1)) + 1]
-              : cameraAngle;
-          
-          const sceneDirective = `
----
-**SCENE DIRECTIVE**
-- **Core Concept:** ${scenePrompt}
-- **Location:** ${subLocation} (This is mandatory).
-- **Overall Mood:** ${mood}.
-- **Camera Style:** ${cameraStyle}.
-- **Camera Angle:** ${selectedAngle === 'Random (Auto)' ? 'As described in concept' : selectedAngle}.
-- **Product Focus:** The product (${productCategory}) from the provided images must be clearly and accurately represented. ${isApparel && !isNoModelMode ? 'The model MUST be wearing the product.' : ''}
-- **Custom Notes:** ${customPrompt || 'None.'}
----`;
-          
-          let finalPrompt;
-          const productProtocol = getProductProtocolPrompt(productReferenceStrength);
-
-          if (isNoModelMode) {
-            finalPrompt = `${productProtocol}${sceneDirective}`;
-          } else {
-            const identityPrompt = getIdentityProtocolPrompt(!!anchorImage, faceReferenceStrength);
-            finalPrompt = `${identityPrompt}${productProtocol}${sceneDirective}`;
-          }
-
-          const newImage = await generateImage(finalPrompt, i, anchorImage);
-          
-          if (isStorytellingMode && newImage) {
-            anchorImage = newImage;
-          }
+            if (generatedImageState) {
+                lastSuccessfulImage = generatedImageState;
+                 // Delay only if not the last item
+                if (i < numConcepts - 1) {
+                    await new Promise(res => setTimeout(res, 1000)); 
+                }
+            } else {
+                // If an image fails, we don't update lastSuccessfulImage to avoid propagating a broken style
+                 if (i < numConcepts - 1) {
+                    await new Promise(res => setTimeout(res, 1000));
+                }
+            }
         }
+
+        setGenerationStatus(null);
+
+    } catch (error) {
+      console.error("An error occurred during the generation process:", error);
+      if (!handleApiError(error)) {
+        setGlobalError(error instanceof Error ? error.message : "An unknown error occurred.");
       }
-    } catch (e) {
-      if (!handleApiError(e)) {
-        setGlobalError('Terjadi kesalahan tak terduga selama pembuatan. Silakan periksa konsol.');
-        setResults([]);
-      }
+      setResults(prev => prev.map(r => r.isLoading ? { ...r, isLoading: false, error: 'Generation failed.' } : r));
+      setGenerationStatus(null);
     } finally {
       setIsGenerating(false);
-      setGenerationStatus(null);
-      isStoppingRef.current = false;
     }
   };
-
+  
   const handleRegenerateImage = async (id: number) => {
-    setResults(prev => prev.map(r => r.id === id ? { ...r, isLoading: true, error: null, imageUrl: null, mimeType: null, videoPrompt: null } : r));
-    setIsGenerating(true);
-    setGenerationStatus('Sutradara AI sedang memikirkan ide baru...');
+    const originalPrompt = imagePrompts[id];
+    if (!originalPrompt) {
+        console.error(`No original prompt found for regeneration of ID ${id}`);
+        setResults(prev => prev.map(r => r.id === id ? { ...r, error: 'Prompt asli tidak ditemukan.' } : r));
+        return;
+    }
 
-    try {
-        const anchorImage = (isStorytellingMode && id > 0 && results[0]?.imageUrl && results[0]?.mimeType) 
-            ? { data: results[0].imageUrl, mimeType: results[0].mimeType } 
-            : null;
+    setResults(prev => prev.map(r => r.id === id ? { ...r, isLoading: true, error: null, videoPrompt: null } : r));
 
-        if (isStorytellingMode && id > 0 && !anchorImage) {
-            throw new Error("Cannot regenerate storytelling image without a valid anchor image.");
+    // Find the last successful image before this one to use as an anchor
+    let anchorImage: ImageState | null = null;
+    if (id > 0) {
+        const previousResult = results.slice(0, id).reverse().find(r => r.imageUrl);
+        if (previousResult) {
+            anchorImage = { data: previousResult.imageUrl!, mimeType: previousResult.mimeType! };
         }
-        
-        const newScenePrompts = await generateScenePrompts(1);
-        const newScenePrompt = newScenePrompts[0];
-        
-        const newImagePrompts = [...imagePrompts];
-        newImagePrompts[id] = newScenePrompt;
-        setImagePrompts(newImagePrompts);
-
-        const selectedAngle = (cameraAngle === 'Random (Auto)' && !isStorytellingMode)
-            ? CAMERA_ANGLE_OPTIONS[Math.floor(Math.random() * (CAMERA_ANGLE_OPTIONS.length - 1)) + 1]
-            : cameraAngle;
-
-        const sceneDirective = `
----
-**SCENE DIRECTIVE**
-- **Core Concept:** ${newScenePrompt}
-- **Location:** ${subLocation} (This is mandatory).
-- **Overall Mood:** ${mood}.
-- **Camera Style:** ${cameraStyle}.
-- **Camera Angle:** ${selectedAngle === 'Random (Auto)' ? 'As described in concept' : selectedAngle}.
-- **Product Focus:** The product (${productCategory}) from the provided images must be clearly and accurately represented. ${isApparel && !isNoModelMode ? 'The model MUST be wearing the product.' : ''}
-- **Custom Notes:** ${customPrompt || 'None.'}
----`;
-
-        let finalPrompt;
-        const productProtocol = getProductProtocolPrompt(productReferenceStrength);
-
-        if (isNoModelMode) {
-            finalPrompt = `${productProtocol}${sceneDirective}`;
-        } else {
-            const identityPrompt = getIdentityProtocolPrompt(!!anchorImage, faceReferenceStrength);
-            finalPrompt = `${identityPrompt}${productProtocol}${sceneDirective}`;
-        }
-
-        setGenerationStatus(`Membuat ulang gambar ${id + 1}...`);
-        await generateImage(finalPrompt, id, anchorImage);
-    } catch (e) {
-        if (!handleApiError(e)) {
-            setResults(prev => prev.map(r => r.id === id ? { ...r, isLoading: false, error: 'Gagal membuat ulang gambar.' } : r));
-        }
-    } finally {
-        setGenerationStatus(null);
-        setIsGenerating(false);
+    }
+    
+    const finalPrompt = constructFinalPrompt(originalPrompt, !!anchorImage);
+    await generateImage(finalPrompt, id, anchorImage);
+  };
+  
+  const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setIsDragging(true);
+  };
+  const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setIsDragging(false);
+  };
+  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setIsDragging(false);
+    const file = e.dataTransfer.files[0];
+    if (file && file.type.startsWith('image/')) {
+       processFile(file, (imageState) => {
+         if (activeUploader === 'custom-bg' && isNoModelMode) {
+           setCustomBackground(imageState);
+           return;
+         }
+        const [type, indexStr] = activeUploader.split('-');
+        const index = parseInt(indexStr, 10);
+         if (type === 'model' && !isNoModelMode) {
+           handleModelImageChange(imageState, index);
+         } else if (type === 'product') {
+           handleProductImageChange(imageState, index);
+         }
+      });
     }
   };
-
-  const getButtonText = () => {
-    if (!faceApiReady) return 'Mempersiapkan Deteksi Wajah...';
-    return 'Hasilkan Konsep';
-  };
+  
+  const locationDisabled = isNoModelMode && !!customBackground;
 
   return (
-    <div className="min-h-screen bg-brand-bg text-text-main font-sans">
-      <header className="py-4 px-8 border-b border-border-color flex justify-between items-center sticky top-0 bg-brand-bg/80 backdrop-blur-sm z-10">
-        <div className="text-left">
-            <h1 className="text-3xl font-bold text-white">Affiliate video base</h1>
-            <p className="text-text-secondary mt-1">Buat brief kreatif dan konsep visual untuk video pemasaran afiliasi Anda.</p>
+    <div 
+        className="flex min-h-screen flex-col lg:flex-row"
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+    >
+      <main className={`flex-1 p-4 md:p-6 lg:p-8 transition-all duration-300 ${viewMode === 'results' ? 'lg:w-[45%]' : 'w-full'}`}>
+        <div className="max-w-3xl mx-auto">
+          <header className="mb-8">
+            <h1 className="text-3xl md:text-4xl font-extrabold text-white">Affiliate Video Base</h1>
+            <p className="text-md md:text-lg text-text-secondary mt-2">Hasilkan brief kreatif dan konsep visual untuk video pemasaran afiliasi Anda.</p>
+          </header>
+          
+          {globalError && (
+              <div className="bg-red-900/50 border border-red-700 text-red-300 p-4 rounded-lg mb-6 animate-fadeIn">
+                  <p className="font-bold">Terjadi Kesalahan</p>
+                  <p className="text-sm">{globalError}</p>
+              </div>
+          )}
+
+          <div className="space-y-8">
+            {/* Section 1: Product Analysis */}
+            <section className="bg-surface p-6 rounded-xl border border-border-color">
+              <h2 className="text-xl font-bold mb-2 text-white">1. Analisis Produk dari Link</h2>
+              <p className="text-sm text-text-secondary mb-6">Mulai dengan menempelkan link produk. AI akan mencoba mengambil gambar, deskripsi, dan ulasan secara otomatis.</p>
+              <div className="flex flex-col sm:flex-row gap-3">
+                <input
+                    id="productLink"
+                    type="url"
+                    value={productLink}
+                    onChange={(e) => setProductLink(e.target.value)}
+                    className="flex-grow bg-brand-bg border border-border-color rounded-md p-2.5 text-sm focus:ring-2 focus:ring-primary-focus outline-none"
+                    placeholder="https://tokopedia.com/..."
+                    disabled={isFetchingProductData}
+                />
+                <button 
+                  onClick={handleFetchProductData}
+                  disabled={isFetchingProductData}
+                  className="flex items-center justify-center sm:w-auto px-5 py-2.5 bg-primary text-white font-bold rounded-md hover:bg-primary-focus transition-colors disabled:bg-gray-600 disabled:cursor-wait"
+                >
+                  {isFetchingProductData ? (
+                    <>
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                      Mengambil...
+                    </>
+                  ) : 'Ambil Data Produk'}
+                </button>
+              </div>
+              {productFetchStatus && (
+                <div className={`mt-3 text-sm p-3 rounded-md flex justify-between items-start ${productFetchStatus.type === 'success' ? 'bg-green-900/50 text-green-300' : 'bg-red-900/50 text-red-300'}`}>
+                    <span className="flex-1 pr-2">{productFetchStatus.message}</span>
+                    <button onClick={() => setProductFetchStatus(null)} className="opacity-70 hover:opacity-100">&times;</button>
+                 </div>
+              )}
+            </section>
+            
+            {/* Section 2: Model & Product Images */}
+            <section className="bg-surface p-6 rounded-xl border border-border-color">
+              <h2 className="text-xl font-bold mb-2 text-white">2. Unggah Aset Visual</h2>
+              <p className="text-sm text-text-secondary mb-6">Sediakan gambar model dan produk Anda. Untuk hasil terbaik, gunakan gambar berkualitas tinggi.</p>
+
+              <div className="space-y-2 mb-6">
+                <label className="flex items-center space-x-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={isNoModelMode}
+                    onChange={(e) => handleNoModelToggle(e.target.checked)}
+                    className="h-5 w-5 rounded bg-brand-bg border-border-color text-primary focus:ring-primary-focus"
+                  />
+                  <span className="font-semibold text-white">Mode "Product Only" (Tanpa Model)</span>
+                </label>
+                <p className="text-xs text-text-secondary ml-8">Aktifkan untuk menghasilkan konsep yang hanya berfokus pada produk, tanpa model manusia.</p>
+              </div>
+              
+              {!isNoModelMode && (
+                <div className="mb-6 animate-fadeIn">
+                   <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+                     <div className="col-span-2">
+                        <ImageUploader
+                            title="Gambar Model Utama"
+                            imagePreview={modelImages[0]}
+                            onImageChange={(img) => handleModelImageChange(img, 0)}
+                            id="model-0"
+                            isActive={activeUploader === 'model-0'}
+                            onSelect={setActiveUploader}
+                            isDragging={isDragging}
+                            isRequired={!isNoModelMode}
+                        />
+                        {croppedModelFace && (
+                            <div className="mt-2 p-2 bg-brand-bg rounded-lg border border-border-color flex items-center gap-3">
+                                <img src={croppedModelFace.data} alt="Cropped face" className="w-12 h-12 rounded-full object-cover border-2 border-primary" />
+                                <div className="flex-1">
+                                    <p className="text-xs font-semibold text-green-400">Wajah Terdeteksi & Siap</p>
+                                    <p className="text-xs text-text-secondary">AI akan menggunakan wajah ini sebagai referensi utama.</p>
+                                </div>
+                            </div>
+                        )}
+                     </div>
+                     {modelImages.slice(1).map((img, i) => (
+                        <ImageUploader
+                            key={i+1}
+                            title={`Pose ${i+1}`}
+                            imagePreview={img}
+                            onImageChange={(img) => handleModelImageChange(img, i + 1)}
+                            id={`model-${i+1}`}
+                            isActive={activeUploader === `model-${i+1}`}
+                            onSelect={setActiveUploader}
+                            isDragging={isDragging}
+                            containerClassName="h-24"
+                        />
+                     ))}
+                  </div>
+                </div>
+              )}
+
+              <div>
+                <div className="grid grid-cols-3 md:grid-cols-6 gap-4">
+                  {productImages.map((img, i) => (
+                      <ImageUploader
+                        key={i}
+                        title={`Produk ${i+1}`}
+                        imagePreview={img}
+                        onImageChange={(img) => handleProductImageChange(img, i)}
+                        id={`product-${i}`}
+                        isActive={activeUploader === `product-${i}`}
+                        onSelect={setActiveUploader}
+                        isDragging={isDragging}
+                        isRequired={i === 0}
+                        containerClassName="h-32"
+                      />
+                  ))}
+                </div>
+              </div>
+            </section>
+            
+            {/* Section 3: Product & Campaign Details */}
+            <section className="bg-surface p-6 rounded-xl border border-border-color">
+              <h2 className="text-xl font-bold mb-2 text-white">3. Detail Produk & Kampanye</h2>
+              <p className="text-sm text-text-secondary mb-6">Berikan konteks pada AI tentang apa yang Anda promosikan. Data di bawah ini dapat diisi otomatis dari link.</p>
+              <div className="space-y-4">
+                <div className="space-y-1">
+                    <label htmlFor="campaignTitle" className="block text-sm font-semibold text-white">Judul Kampanye (Opsional)</label>
+                    <input
+                        id="campaignTitle"
+                        type="text"
+                        value={campaignTitle}
+                        onChange={(e) => setCampaignTitle(e.target.value)}
+                        className="w-full bg-brand-bg border border-border-color rounded-md p-2.5 text-sm focus:ring-2 focus:ring-primary-focus outline-none"
+                        placeholder="Contoh: Peluncuran Serum Ajaib Musim Panas"/>
+                </div>
+
+                <div className="space-y-1">
+                    <label htmlFor="productCategory" className="block text-sm font-semibold text-white">Kategori Produk</label>
+                    <select
+                        id="productCategory"
+                        value={productCategory}
+                        onChange={(e) => setProductCategory(e.target.value)}
+                        className="w-full bg-brand-bg border border-border-color rounded-md p-2.5 text-sm focus:ring-2 focus:ring-primary-focus outline-none">
+                        {PRODUCT_CATEGORIES.map(cat => <option key={cat} value={cat}>{cat}</option>)}
+                    </select>
+                </div>
+                
+                <div className="space-y-1">
+                    <label htmlFor="productDescription" className="block text-sm font-semibold text-white">Deskripsi Singkat Produk</label>
+                    <textarea
+                        id="productDescription"
+                        value={productDescription}
+                        onChange={(e) => setProductDescription(e.target.value)}
+                        className="w-full bg-brand-bg border border-border-color rounded-md p-2.5 text-sm focus:ring-2 focus:ring-primary-focus outline-none resize-none"
+                        rows={4}
+                        placeholder="Contoh: Serum wajah dengan vitamin C dan asam hialuronat untuk mencerahkan kulit dan mengurangi noda hitam."/>
+                </div>
+
+                <div className="space-y-1">
+                    <label htmlFor="productReviews" className="block text-sm font-semibold text-white">Ulasan Pelanggan (Opsional)</label>
+                     <p className="text-xs text-text-secondary">Tempel 1-3 ulasan terbaik. Ini akan sangat membantu AI dalam membuat skrip yang meyakinkan.</p>
+                    <textarea
+                        id="productReviews"
+                        value={productReviews}
+                        onChange={(e) => setProductReviews(e.target.value)}
+                        className="w-full bg-brand-bg border border-border-color rounded-md p-2.5 text-sm focus:ring-2 focus:ring-primary-focus outline-none resize-none"
+                        rows={4}
+                        placeholder="Contoh: 'Suka banget sama serumnya, flek hitamku memudar dalam seminggu!' - 'Teksturnya ringan dan cepat meresap, gak lengket sama sekali.'"/>
+                </div>
+              </div>
+            </section>
+
+
+            {/* Section 4: Creative Direction */}
+            <section className="bg-surface p-6 rounded-xl border border-border-color">
+              <h2 className="text-xl font-bold mb-2 text-white">4. Arahan Kreatif</h2>
+              <p className="text-sm text-text-secondary mb-6">Pandu AI untuk menghasilkan visual yang sesuai dengan visi Anda.</p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-1">
+                    <label htmlFor="cameraStyle" className="block text-sm font-semibold text-white">Gaya Kamera & Lensa</label>
+                    <select
+                        id="cameraStyle"
+                        value={cameraStyle}
+                        onChange={(e) => setCameraStyle(e.target.value)}
+                        className="w-full bg-brand-bg border border-border-color rounded-md p-2.5 text-sm focus:ring-2 focus:ring-primary-focus outline-none">
+                        {CAMERA_OPTIONS.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                    </select>
+                </div>
+                <div className="space-y-1">
+                    <label htmlFor="mood" className="block text-sm font-semibold text-white">Mood & Suasana</label>
+                    <select
+                        id="mood"
+                        value={mood}
+                        onChange={(e) => setMood(e.target.value)}
+                        className="w-full bg-brand-bg border border-border-color rounded-md p-2.5 text-sm focus:ring-2 focus:ring-primary-focus outline-none">
+                        {MOOD_OPTIONS.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                    </select>
+                </div>
+
+                <div className="space-y-1">
+                    <label htmlFor="locationType" className="block text-sm font-semibold text-white">Tipe Lokasi</label>
+                    <select
+                        id="locationType"
+                        value={locationType}
+                        onChange={(e) => setLocationType(e.target.value)}
+                        disabled={locationDisabled}
+                        className={`w-full bg-brand-bg border border-border-color rounded-md p-2.5 text-sm focus:ring-2 focus:ring-primary-focus outline-none ${locationDisabled ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    >
+                       {LOCATION_TYPE_OPTIONS.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                       <option value="Studio Mini">Studio Mini</option>
+                    </select>
+                     {locationDisabled && <p className="text-xs text-yellow-400 mt-1">Lokasi dinonaktifkan saat menggunakan background kustom.</p>}
+                </div>
+
+                <div className="space-y-1">
+                    <label htmlFor="subLocation" className="block text-sm font-semibold text-white">Spesifik Lokasi</label>
+                    <select
+                        id="subLocation"
+                        value={subLocation}
+                        onChange={(e) => setSubLocation(e.target.value)}
+                        disabled={locationDisabled}
+                        className={`w-full bg-brand-bg border border-border-color rounded-md p-2.5 text-sm focus:ring-2 focus:ring-primary-focus outline-none ${locationDisabled ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    >
+                        {(locationType === 'Indoor' ? INDOOR_LOCATIONS : locationType === 'Outdoor' ? OUTDOOR_LOCATIONS : STUDIO_MINI_LOCATIONS).map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                    </select>
+                </div>
+
+                 <div className="space-y-1">
+                    <label htmlFor="voiceoverStyle" className="block text-sm font-semibold text-white">Gaya Voiceover</label>
+                    <select
+                        id="voiceoverStyle"
+                        value={voiceoverStyle}
+                        onChange={(e) => setVoiceoverStyle(e.target.value)}
+                        className="w-full bg-brand-bg border border-border-color rounded-md p-2.5 text-sm focus:ring-2 focus:ring-primary-focus outline-none">
+                        {VOICEOVER_STYLE_OPTIONS.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                    </select>
+                </div>
+
+                <div className="space-y-1">
+                     <label htmlFor="cameraAngle" className="block text-sm font-semibold text-white">Sudut Kamera</label>
+                    <select
+                        id="cameraAngle"
+                        value={cameraAngle}
+                        onChange={(e) => setCameraAngle(e.target.value)}
+                        disabled={isApparel}
+                        className={`w-full bg-brand-bg border border-border-color rounded-md p-2.5 text-sm focus:ring-2 focus:ring-primary-focus outline-none ${isApparel ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                         {isNoModelMode && !customBackground ? 
+                            [<option key="product-close-up" value="Product Close-up">Product Close-up</option>] 
+                            : CAMERA_ANGLE_OPTIONS.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                    </select>
+                     {isApparel && <p className="text-xs text-yellow-400 mt-1">Otomatis diatur ke "Full Body Shot" untuk Pakaian.</p>}
+                </div>
+
+                 <div className="space-y-2 col-span-1 md:col-span-2">
+                    <label className="flex items-center space-x-3 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={isStorytellingMode}
+                        onChange={(e) => setIsStorytellingMode(e.target.checked)}
+                        disabled={isNoModelMode}
+                        className="h-5 w-5 rounded bg-brand-bg border-border-color text-primary focus:ring-primary-focus disabled:opacity-50"
+                      />
+                      <span className={`font-semibold text-white ${isNoModelMode ? 'text-text-secondary' : ''}`}>Mode Storytelling Berkelanjutan</span>
+                    </label>
+                    <p className={`text-xs ml-8 ${isNoModelMode ? 'text-text-secondary/50' : 'text-text-secondary'}`}>Aktifkan untuk membuat serangkaian video yang saling berhubungan, di mana setiap brief baru akan melanjutkan cerita dari brief sebelumnya.</p>
+                </div>
+
+                <div className="space-y-2 col-span-1 md:col-span-2">
+                    <label className="flex items-center space-x-3 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={isApparel}
+                        onChange={(e) => setIsApparel(e.target.checked)}
+                        disabled={isNoModelMode}
+                        className="h-5 w-5 rounded bg-brand-bg border-border-color text-primary focus:ring-primary-focus disabled:opacity-50"
+                      />
+                      <span className={`font-semibold text-white ${isNoModelMode ? 'text-text-secondary' : ''}`}>Mode Pakaian (Apparel)</span>
+                    </label>
+                    <p className={`text-xs ml-8 ${isNoModelMode ? 'text-text-secondary/50' : 'text-text-secondary'}`}>Optimalkan AI untuk menampilkan produk pakaian dengan pose seluruh badan.</p>
+                </div>
+
+                {isNoModelMode && (
+                    <div className="col-span-1 md:col-span-2 space-y-4 border-l-4 border-primary pl-4 py-2 mt-2 animate-fadeIn">
+                        <h4 className="font-bold text-lg text-primary-focus">Opsi Product-Only</h4>
+                        
+                        <div>
+                            <h3 className="text-sm font-semibold mb-2 text-white">Background Kustom (Opsional)</h3>
+                            <ImageUploader
+                                title="Background Kustom"
+                                imagePreview={customBackground}
+                                onImageChange={setCustomBackground}
+                                id="custom-bg"
+                                isActive={activeUploader === 'custom-bg'}
+                                onSelect={setActiveUploader}
+                                isDragging={isDragging}
+                                containerClassName="h-32"
+                            />
+                        </div>
+                        
+                        <div>
+                            <h3 className="text-sm font-semibold mb-2 text-white">Gaya Presentasi Produk</h3>
+                            <div className="flex gap-4">
+                                <label className={`flex-1 flex items-center p-3 rounded-lg cursor-pointer transition-all border-2 ${productPresentationStyle === 'hand' ? 'border-primary bg-primary/10' : 'border-border-color bg-brand-bg'}`}>
+                                    <input type="radio" name="presentationStyle" value="hand" checked={productPresentationStyle === 'hand'} onChange={() => setProductPresentationStyle('hand')} className="hidden" />
+                                    <div className="ml-2 text-center w-full">
+                                        <p className="font-semibold">Dipegang Tangan</p>
+                                        <p className="text-xs text-text-secondary">Produk dipegang oleh tangan yang elegan.</p>
+                                    </div>
+                                </label>
+                                <label className={`flex-1 flex items-center p-3 rounded-lg cursor-pointer transition-all border-2 ${productPresentationStyle === 'placed' ? 'border-primary bg-primary/10' : 'border-border-color bg-brand-bg'}`}>
+                                    <input type="radio" name="presentationStyle" value="placed" checked={productPresentationStyle === 'placed'} onChange={() => setProductPresentationStyle('placed')} className="hidden" />
+                                    <div className="ml-2 text-center w-full">
+                                        <p className="font-semibold">Diletakkan</p>
+                                        <p className="text-xs text-text-secondary">Produk diletakkan secara estetik.</p>
+                                    </div>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+
+                 <div className="space-y-1 col-span-1 md:col-span-2">
+                    <label htmlFor="customPrompt" className="block text-sm font-semibold text-white">Prompt Kustom (Opsi Lanjutan)</label>
+                    <textarea
+                        id="customPrompt"
+                        value={customPrompt}
+                        onChange={(e) => setCustomPrompt(e.target.value)}
+                        className="w-full bg-brand-bg border border-border-color rounded-md p-2.5 text-sm font-mono focus:ring-2 focus:ring-primary-focus outline-none resize-y"
+                        rows={4}
+                        placeholder="Tambahkan instruksi spesifik di sini..."/>
+                </div>
+
+              </div>
+            </section>
+
+            {/* Section 5: Generation Settings */}
+            <section className="bg-surface p-6 rounded-xl border border-border-color">
+                <h2 className="text-xl font-bold mb-2 text-white">5. Pengaturan Generasi</h2>
+                <p className="text-sm text-text-secondary mb-6">Konfigurasikan bagaimana AI menangani gambar referensi Anda.</p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-4">
+                    <div className="space-y-2">
+                        <label htmlFor="numConcepts" className="block text-sm font-semibold text-white">Jumlah Konsep: {numConcepts}</label>
+                        <input
+                            id="numConcepts"
+                            type="range"
+                            min="1"
+                            max="10"
+                            value={numConcepts}
+                            onChange={(e) => setNumConcepts(parseInt(e.target.value, 10))}
+                            className="w-full h-2 bg-brand-bg rounded-lg appearance-none cursor-pointer accent-primary"
+                        />
+                    </div>
+                    <div className={`space-y-2 ${isNoModelMode ? 'opacity-50' : ''}`}>
+                        <label htmlFor="faceReferenceStrength" className="block text-sm font-semibold text-white">Kekuatan Referensi Wajah: {faceReferenceStrength}%</label>
+                        <input
+                            id="faceReferenceStrength"
+                            type="range"
+                            min="50"
+                            max="100"
+                            step="5"
+                            value={faceReferenceStrength}
+                            onChange={(e) => setFaceReferenceStrength(parseInt(e.target.value, 10))}
+                            disabled={isNoModelMode}
+                            className="w-full h-2 bg-brand-bg rounded-lg appearance-none cursor-pointer accent-primary disabled:cursor-not-allowed"
+                        />
+                        <p className="text-xs text-text-secondary">
+                          {faceReferenceStrength > 90 ? 'Sangat ketat, memaksa kemiripan wajah.' : faceReferenceStrength > 70 ? 'Seimbang, kemiripan kuat dengan sedikit fleksibilitas.' : 'Lebih longgar, terinspirasi oleh wajah referensi.'}
+                        </p>
+                    </div>
+
+                     <div className="space-y-2 col-span-1 md:col-span-2">
+                        <label htmlFor="productReferenceStrength" className="block text-sm font-semibold text-white">Kekuatan Referensi Produk: {productReferenceStrength}%</label>
+                        <input
+                            id="productReferenceStrength"
+                            type="range"
+                            min="70"
+                            max="100"
+                            step="5"
+                            value={productReferenceStrength}
+                            onChange={(e) => setProductReferenceStrength(parseInt(e.target.value, 10))}
+                            className="w-full h-2 bg-brand-bg rounded-lg appearance-none cursor-pointer accent-primary"
+                        />
+                         <p className="text-xs text-text-secondary">
+                          {productReferenceStrength > 90 ? 'Sangat ketat, mencoba mereplikasi produk secara persis.' : productReferenceStrength > 75 ? 'Seimbang, kemiripan produk yang kuat.' : 'Lebih longgar, terinspirasi oleh bentuk dan warna produk.'}
+                        </p>
+                    </div>
+
+                </div>
+            </section>
+
+             <div className="mt-8 pt-6 border-t border-border-color">
+                {isGenerating ? (
+                    <button
+                        onClick={handleStop}
+                        className="w-full text-center text-lg font-bold py-4 px-6 rounded-lg bg-red-600 text-white shadow-lg hover:bg-red-700 transition-all duration-300"
+                    >
+                        Hentikan Generasi
+                    </button>
+                ) : (
+                    <button
+                        onClick={handleGenerate}
+                        disabled={isGenerating}
+                        className="w-full text-center text-lg font-bold py-4 px-6 rounded-lg bg-primary text-white shadow-lg hover:bg-primary-focus focus:ring-4 focus:ring-primary-focus/50 transition-all duration-300 disabled:bg-gray-600 disabled:cursor-not-allowed"
+                    >
+                        Hasilkan Konsep
+                    </button>
+                )}
+            </div>
+
+          </div>
         </div>
-      </header>
+      </main>
       
+      <GenerationSidebar 
+        isOpen={viewMode === 'results'}
+        onClose={() => setViewMode('form')}
+        results={results}
+        isGenerating={isGenerating}
+        generationStatus={generationStatus}
+        handleApiError={handleApiError}
+        onGenerateBrief={handleGenerateBrief}
+        onRegenerateImage={handleRegenerateImage}
+        isNoModelMode={isNoModelMode}
+      />
+
       {isFaceCropModalOpen && imageForFaceCrop && (
-        <FaceCropModal
+          <FaceCropModal 
             imageState={imageForFaceCrop}
             onClose={handleFaceCropClose}
             onSave={handleFaceCropSave}
-        />
-       )}
-
-      <div className={`lg:flex transition-all duration-500 ease-in-out`}>
-        <main className={`p-4 md:p-8 transition-all duration-500 ease-in-out w-full ${viewMode === 'results' ? 'lg:w-[45%]' : 'lg:w-full'}`}>
-          <div className="max-w-7xl mx-auto bg-surface rounded-lg p-6 shadow-lg border border-border-color">
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-8 gap-y-6">
-                  {/* Inputs Column */}
-                  <div className="space-y-4">
-                      <div>
-                          <label htmlFor="campaignTitle" className="block text-sm font-semibold mb-2 text-white">Judul Kampanye <span className="text-red-500">*</span></label>
-                          <input type="text" id="campaignTitle" value={campaignTitle} onChange={e => setCampaignTitle(e.target.value)} className="w-full bg-brand-bg border border-border-color rounded-md p-2 text-sm focus:ring-2 focus:ring-primary-focus outline-none transition-colors" placeholder="cth. Kopi Pagi & Vibe Smartwatch" />
-                      </div>
-                      <div>
-                          <label htmlFor="productCategory" className="block text-sm font-semibold mb-2 text-white">Kategori Produk</label>
-                          <select id="productCategory" value={productCategory} onChange={e => setProductCategory(e.target.value)} className="w-full bg-brand-bg border border-border-color rounded-md p-2 text-sm focus:ring-2 focus:ring-primary-focus outline-none appearance-none transition-colors">
-                              {PRODUCT_CATEGORIES.map(opt => <option key={opt} value={opt}>{opt}</option>)}
-                          </select>
-                      </div>
-                      <div>
-                          <label htmlFor="productDescription" className="block text-sm font-semibold mb-2 text-white">Deskripsi Produk (Opsional)</label>
-                          <textarea id="productDescription" value={productDescription} onChange={e => setProductDescription(e.target.value)} rows={3} className="w-full bg-brand-bg border border-border-color rounded-md p-2 text-sm resize-none focus:ring-2 focus:ring-primary-focus outline-none transition-colors" placeholder="cth. Smartwatch hitam dengan layar bulat, tali silikon, untuk kebugaran dan penggunaan sehari-hari." />
-                      </div>
-                      <div>
-                          <label htmlFor="productReviews" className="block text-sm font-semibold mb-2 text-white">Ulasan Produk (Referensi Voiceover)</label>
-                          <textarea 
-                              id="productReviews" 
-                              value={productReviews} 
-                              onChange={e => setProductReviews(e.target.value)} 
-                              rows={4} 
-                              className="w-full bg-brand-bg border border-border-color rounded-md p-2 text-sm resize-none focus:ring-2 focus:ring-primary-focus outline-none transition-colors" 
-                              placeholder={"cth.\nKualitasnya top banget, gak nyangka!\nBaterainya awet seharian lebih.\nDesainnya keren, cocok buat OOTD."}
-                          />
-                      </div>
-                      <div>
-                          <label htmlFor="customPrompt" className="block text-sm font-semibold mb-2 text-white">Prompt Kreatif Kustom (Opsional)</label>
-                          <textarea id="customPrompt" value={customPrompt} onChange={e => setCustomPrompt(e.target.value)} rows={4} className="w-full bg-brand-bg border border-border-color rounded-md p-2 text-sm resize-none focus:ring-2 focus:ring-primary-focus outline-none transition-colors" placeholder="cth. Model tertawa sambil berlari di ladang bunga, memakai jam tangan..." />
-                      </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                          <div>
-                              <label htmlFor="cameraStyle" className="block text-sm font-semibold mb-2 text-white">Gaya Kamera</label>
-                              <select id="cameraStyle" value={cameraStyle} onChange={e => setCameraStyle(e.target.value)} className="w-full bg-brand-bg border border-border-color rounded-md p-2 text-sm focus:ring-2 focus:ring-primary-focus outline-none appearance-none transition-colors">
-                                  {CAMERA_OPTIONS.map(opt => <option key={opt} value={opt}>{opt}</option>)}
-                              </select>
-                          </div>
-                          <div>
-                              <label htmlFor="mood" className="block text-sm font-semibold mb-2 text-white">Mood</label>
-                              <select id="mood" value={mood} onChange={e => setMood(e.target.value)} className="w-full bg-brand-bg border border-border-color rounded-md p-2 text-sm focus:ring-2 focus:ring-primary-focus outline-none appearance-none transition-colors">
-                                  {MOOD_OPTIONS.map(opt => <option key={opt} value={opt}>{opt}</option>)}
-                              </select>
-                          </div>
-                          <div>
-                              <label htmlFor="voiceoverStyle" className="block text-sm font-semibold mb-2 text-white">Gaya Voiceover</label>
-                              <select id="voiceoverStyle" value={voiceoverStyle} onChange={e => setVoiceoverStyle(e.target.value)} className="w-full bg-brand-bg border border-border-color rounded-md p-2 text-sm focus:ring-2 focus:ring-primary-focus outline-none appearance-none transition-colors">
-                                  {VOICEOVER_STYLE_OPTIONS.map(opt => <option key={opt} value={opt}>{opt}</option>)}
-                              </select>
-                          </div>
-                      </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                          <div>
-                              <label htmlFor="location" className="block text-sm font-semibold mb-2 text-white">Tipe Lokasi</label>
-                              <select id="location" value={locationType} onChange={e => setLocationType(e.target.value)} className="w-full bg-brand-bg border border-border-color rounded-md p-2 text-sm focus:ring-2 focus:ring-primary-focus outline-none appearance-none transition-colors">
-                                  {LOCATION_TYPE_OPTIONS.map(opt => <option key={opt} value={opt}>{opt}</option>)}
-                              </select>
-                          </div>
-                          <div>
-                              <label htmlFor="subLocation" className="block text-sm font-semibold mb-2 text-white">Sub-Lokasi</label>
-                              <select id="subLocation" value={subLocation} onChange={e => setSubLocation(e.target.value)} className="w-full bg-brand-bg border border-border-color rounded-md p-2 text-sm focus:ring-2 focus:ring-primary-focus outline-none appearance-none transition-colors">
-                                  {(locationType === 'Indoor' ? INDOOR_LOCATIONS : OUTDOOR_LOCATIONS).map(opt => <option key={opt} value={opt}>{opt}</option>)}
-                              </select>
-                          </div>
-                      </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                          <div>
-                              <label htmlFor="cameraAngle" className="block text-sm font-semibold mb-2 text-white">Sudut Kamera</label>
-                              <select id="cameraAngle" value={cameraAngle} onChange={e => setCameraAngle(e.target.value)} className="w-full bg-brand-bg border border-border-color rounded-md p-2 text-sm focus:ring-2 focus:ring-primary-focus outline-none appearance-none transition-colors">
-                                  {CAMERA_ANGLE_OPTIONS.map(opt => <option key={opt} value={opt}>{opt}</option>)}
-                              </select>
-                          </div>
-                          <div>
-                              <label htmlFor="numConcepts" className="block text-sm font-semibold mb-2 text-white">Jumlah Konsep</label>
-                              <select 
-                                  id="numConcepts" 
-                                  value={numConcepts} 
-                                  onChange={e => setNumConcepts(parseInt(e.target.value, 10))} 
-                                  className="w-full bg-brand-bg border border-border-color rounded-md p-2 text-sm focus:ring-2 focus:ring-primary-focus outline-none appearance-none transition-colors"
-                              >
-                                  {[1, 2, 3, 4, 5, 6].map(n => <option key={n} value={n}>{n}</option>)}
-                              </select>
-                          </div>
-                      </div>
-                      <div>
-                          <label htmlFor="faceReferenceStrength" className={`block text-sm font-semibold mb-2 ${isNoModelMode ? 'text-text-secondary' : 'text-white'}`}>
-                              Kekuatan Referensi Wajah ({faceReferenceStrength}%)
-                          </label>
-                          <input
-                              type="range"
-                              id="faceReferenceStrength"
-                              min="50"
-                              max="100"
-                              value={faceReferenceStrength}
-                              onChange={e => setFaceReferenceStrength(parseInt(e.target.value, 10))}
-                              disabled={isNoModelMode}
-                              className="w-full h-2 bg-border-color rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:bg-primary [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full disabled:opacity-50 disabled:cursor-not-allowed"
-                          />
-                          <p className={`text-xs text-text-secondary mt-1 ${isNoModelMode ? 'opacity-50' : ''}`}>
-                              Kontrol seberapa ketat AI harus mengikuti wajah model. 100% untuk kemiripan yang tepat.
-                          </p>
-                      </div>
-                      <div>
-                          <label htmlFor="productReferenceStrength" className={`block text-sm font-semibold mb-2 ${!productImages[0] ? 'text-text-secondary' : 'text-white'}`}>
-                              Kekuatan Referensi Produk ({productReferenceStrength}%)
-                          </label>
-                          <input
-                              type="range"
-                              id="productReferenceStrength"
-                              min="50"
-                              max="100"
-                              value={productReferenceStrength}
-                              onChange={e => setProductReferenceStrength(parseInt(e.target.value, 10))}
-                              disabled={!productImages[0]}
-                              className="w-full h-2 bg-border-color rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:bg-primary [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full disabled:opacity-50 disabled:cursor-not-allowed"
-                          />
-                          <p className={`text-xs text-text-secondary mt-1 ${!productImages[0] ? 'opacity-50' : ''}`}>
-                              Kontrol seberapa ketat AI harus mengikuti foto produk. 100% untuk duplikasi yang tepat.
-                          </p>
-                      </div>
-                      <div className="flex items-center pt-2 space-x-6">
-                          <label htmlFor="isApparel" className="flex items-center space-x-3 cursor-pointer">
-                              <input type="checkbox" id="isApparel" checked={isApparel} onChange={e => setIsApparel(e.target.checked)} disabled={isNoModelMode} className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary disabled:opacity-50" />
-                              <span className={`text-sm font-semibold ${isNoModelMode ? 'text-text-secondary' : 'text-white'}`}>Produk adalah Pakaian</span>
-                          </label>
-                          <label htmlFor="storytelling" className="flex items-center space-x-3 cursor-pointer">
-                              <input type="checkbox" id="storytelling" checked={isStorytellingMode} onChange={e => setIsStorytellingMode(e.target.checked)} disabled={isNoModelMode} className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary disabled:opacity-50" />
-                              <span className={`text-sm font-semibold ${isNoModelMode ? 'text-text-secondary' : 'text-white'}`}>Mode Bercerita</span>
-                          </label>
-                          <label htmlFor="noModelMode" className="flex items-center space-x-3 cursor-pointer">
-                              <input type="checkbox" id="noModelMode" checked={isNoModelMode} onChange={e => handleNoModelToggle(e.target.checked)} className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary" />
-                              <span className="text-sm font-semibold text-white">Produk Saja (Tanpa Model)</span>
-                          </label>
-                      </div>
-                  </div>
-
-                  {/* Image Uploaders Column */}
-                  <div className="space-y-6">
-                      {!isNoModelMode && (
-                        <div>
-                          <h3 className="text-lg font-semibold mb-3 text-white">Foto Model <span className="text-red-500">*</span></h3>
-                          <div className="grid grid-cols-1 gap-4">
-                            <div className="relative">
-                                <ImageUploader 
-                                    title="Foto Model Utama"
-                                    imagePreview={modelImages[0]} 
-                                    onImageChange={(img) => handleModelImageChange(img, 0)} 
-                                    id="model-0"
-                                    isActive={activeUploader === 'model-0'}
-                                    onSelect={setActiveUploader}
-                                    isDragging={isDragging}
-                                    isRequired={true}
-                                    containerClassName="h-48"
-                                />
-                                {croppedModelFace && (
-                                    <img 
-                                        src={croppedModelFace.data} 
-                                        alt="Cropped face" 
-                                        className="absolute bottom-2 right-2 h-16 w-16 rounded-full border-2 border-primary object-cover shadow-lg"
-                                        title="Wajah yang difokuskan untuk AI"
-                                    />
-                                )}
-                             </div>
-                            <div className="grid grid-cols-4 gap-2">
-                              {[1, 2, 3, 4].map(i => (
-                                <ImageUploader 
-                                    key={i}
-                                    title={`Opsional ${i}`}
-                                    imagePreview={modelImages[i]} 
-                                    onImageChange={(img) => handleModelImageChange(img, i)}
-                                    id={`model-${i}`}
-                                    isActive={activeUploader === `model-${i}`}
-                                    onSelect={setActiveUploader}
-                                    isDragging={isDragging}
-                                    containerClassName="h-20"
-                                  />
-                              ))}
-                            </div>
-                          </div>
-                        </div>
-                      )}
-                      <div>
-                          <h3 className="text-lg font-semibold mb-3 text-white">Foto Produk <span className="text-red-500">*</span></h3>
-                          <ImageUploader 
-                              title="Foto Produk Utama" 
-                              imagePreview={productImages[0]} 
-                              onImageChange={(img) => handleProductImageChange(img, 0)}
-                              id="product-0"
-                              isActive={activeUploader === 'product-0'}
-                              onSelect={setActiveUploader}
-                              isDragging={isDragging}
-                              isRequired={true}
-                              containerClassName="h-48"
-                          />
-                          <div className="grid grid-cols-5 gap-2 mt-2">
-                            {[1, 2, 3, 4, 5].map(i => (
-                              <ImageUploader 
-                                key={i}
-                                title={`Opsional ${i}`}
-                                imagePreview={productImages[i]} 
-                                onImageChange={(img) => handleProductImageChange(img, i)}
-                                id={`product-${i}`}
-                                isActive={activeUploader === `product-${i}`}
-                                onSelect={setActiveUploader}
-                                isDragging={isDragging}
-                                containerClassName="h-20"
-                              />
-                            ))}
-                          </div>
-                      </div>
-                  </div>
-              </div>
-              
-              <div className="mt-8 text-center">
-                  {!isGenerating ? (
-                      <button 
-                          onClick={handleGenerate} 
-                          disabled={!faceApiReady || ((!isNoModelMode && !modelImages[0]) || !productImages[0] || !campaignTitle)}
-                          className="bg-primary text-white font-bold py-3 px-10 rounded-lg text-lg hover:bg-primary-focus focus:outline-none focus:ring-4 focus:ring-primary-focus/50 transition-all duration-300 disabled:bg-gray-600 disabled:cursor-not-allowed shadow-lg hover:shadow-primary/40 disabled:shadow-none transform hover:-translate-y-1"
-                      >
-                          {getButtonText()}
-                      </button>
-                  ) : (
-                      <button 
-                          onClick={handleStopGeneration} 
-                          className="bg-red-600 text-white font-bold py-3 px-10 rounded-lg text-lg hover:bg-red-700 focus:outline-none focus:ring-4 focus:ring-red-700/50 transition-all duration-300 shadow-lg hover:shadow-red-600/40 transform hover:-translate-y-1"
-                      >
-                          Hentikan Generasi
-                      </button>
-                  )}
-                  {globalError && <p className="text-red-400 text-sm mt-4">{globalError}</p>}
-              </div>
-          </div>
-        </main>
-
-        <GenerationSidebar
-          isOpen={viewMode === 'results'}
-          onClose={() => setViewMode('form')}
-          results={results}
-          isGenerating={isGenerating}
-          generationStatus={generationStatus}
-          handleApiError={handleApiError}
-          onGenerateBrief={handleGenerateBrief}
-          onRegenerateImage={handleRegenerateImage}
-          isNoModelMode={isNoModelMode}
-        />
-      </div>
+          />
+      )}
+      
     </div>
   );
 };

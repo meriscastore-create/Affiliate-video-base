@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import { GoogleGenAI } from '@google/genai';
 import { BriefData, VideoPrompt } from '../types';
@@ -81,13 +82,16 @@ const ResultCard: React.FC<ResultCardProps> = ({ id, imageUrl, videoPrompt, isLo
     try {
         const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-        const baseVoiceoverInstructions = `- **VOICEOVER SCRIPT:** For the 'voice_over.text' field, you must generate a NEW, short, natural-sounding script. The tone MUST be conversational and authentic, like a real content creator sharing a personal discovery. It MUST follow this narrative structure:
-    1. **RELATABLE PROBLEM (HOOK):** Start with a common frustration the product solves.
-    2. **PAST SKEPTICISM/STRUGGLE:** Briefly mention past beliefs or struggles before the product.
-    3. **THE DISCOVERY (PRODUCT):** Introduce the product as the solution.
-    4. **EMOTIONAL REACTION (SOFT CTA):** End with a genuine reaction of satisfaction. This is the call-to-action.
+        // Extract the existing, approved script from the creative brief.
+        const existingScript = videoPrompt.audio_generation_parameters.voiceover.script_lines
+            .map(line => line.text)
+            .join(' ')
+            .replace(/"/g, '\\"'); // Escape quotes for safety within the prompt.
 
-- **STYLE REFERENCE (DO NOT COPY, USE FOR TONE/STRUCTURE):** "Baru dandan rapi, eh beberapa jam kemudian mascara udah luntur 😩 Aku pikir semua mascara sama aja, tapi pas coba Inesglam, ternyata beda. Nggak luntur, nggak berat, dan bulu mata tetap lentik seharian. Sumpah, senang banget!”`;
+        const baseVoiceoverInstructions = `- **CRITICAL VOICEVOVER INSTRUCTION:**
+    - For the 'voice_over.text' field, you MUST use the following script EXACTLY as it is written. DO NOT change it, shorten it, or alter its meaning in any way.
+    - **Script to use:** "${existingScript}"
+- **VOICE CHARACTER:** For the 'voice_over.voice_character' field, you MUST use the exact string: "female, cute, humble, fast".`;
 
         let generationPrompt: string;
         
@@ -99,6 +103,7 @@ IMPORTANT: The entire final JSON output MUST be less than 1000 characters long. 
 **Instructions for PRODUCT-ONLY Video:**
 - The 'prompt' field must describe a dynamic, visually appealing scene focusing ONLY on the product.
 - The 'style' field MUST primarily include: "clean, no text, no watermark, no popup, no sticker". You can add other style descriptors after these.
+- The 'camera_motion' field MUST describe a dynamic camera movement. AVOID using the word "static". Choose a suitable dynamic movement (e.g., "slow zoom in", "gentle pan right", "subtle dolly forward").
 ${baseVoiceoverInstructions}
 - The entire output must be a single, valid JSON object with no extra characters or formatting.
 
@@ -112,6 +117,7 @@ IMPORTANT: The entire final JSON output MUST be less than 1000 characters long. 
 **Instructions for Video with Model:**
 - The 'prompt' field must be a descriptive paragraph that crafts a compelling visual hook, making it feel authentic and like it's from a real content creator. It MUST include a phrase explicitly stating that the character is lip-syncing to the audio (e.g., 'the influencer is seen lip-syncing to the audio').
 - The 'style' field MUST primarily include: "clean, no text, no watermark, no popup, no sticker". You can add other style descriptors after these.
+- The 'camera_motion' field MUST describe a dynamic camera movement. AVOID using the word "static". Choose a suitable dynamic movement (e.g., "slow zoom in", "gentle pan right", "subtle dolly forward").
 ${baseVoiceoverInstructions}
 - The entire output must be a single, valid JSON object with no extra characters or formatting.
 

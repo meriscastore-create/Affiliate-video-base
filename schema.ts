@@ -1,6 +1,38 @@
 
 
+
+
 import { Type } from "@google/genai";
+
+export const productAnalysisSchema = {
+  type: Type.OBJECT,
+  properties: {
+    product_name: {
+      type: Type.STRING,
+      description: "The exact, full product title as it appears on the page. Must be a direct copy-paste, without any modification or summarization.",
+    },
+    description: {
+      type: Type.STRING,
+      description: "The exact, full product description as it appears on the page. Must be a direct copy-paste of the entire description text, without any modification or summarization.",
+    },
+    product_category: {
+        type: Type.STRING,
+        description: "The most appropriate product category from the provided list. Must be an exact match to one of the options.",
+    },
+    reviews_summary: {
+      type: Type.STRING,
+      description: "A summary of the most common positive points from customer reviews. Should be presented as if quoting multiple people, e.g., '\"Produknya bagus, bikin cerah! - Ana\"\\n\"Pengiriman cepat, packing aman. - Budi\"'",
+    },
+    image_search_terms: {
+        type: Type.ARRAY,
+        description: "An array of 3-4 highly specific Google search terms that will find high-quality images of this exact product.",
+        items: {
+            type: Type.STRING,
+        }
+    }
+  },
+  required: ["product_name", "description", "product_category", "reviews_summary", "image_search_terms"],
+};
 
 export const scenePromptsSchema = {
   type: Type.OBJECT,
@@ -37,9 +69,10 @@ export const videoPromptSchema = {
         type: Type.OBJECT,
         properties: {
             language: { type: Type.STRING, description: "ISO 639-1 language code, e.g., 'id' for Indonesian." },
+            voice_character: { type: Type.STRING, description: "e.g., 'female, cute, humble, fast'." },
             text: { type: Type.STRING, description: "The full voiceover script as a single, concise string." }
         },
-        required: ["language", "text"]
+        required: ["language", "voice_character", "text"]
     }
   },
   required: ["prompt", "style", "camera_motion", "lighting", "duration", "aspect_ratio", "voice_over"]
